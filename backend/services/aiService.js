@@ -12,6 +12,53 @@ const GROQ_TTS_VOICE =
 
 const GROQ_CHAT_MODEL = "llama-3.1-8b-instant";
 
+function getLatestUserText(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user" && typeof message.content === "string") {
+      return message.content.trim();
+    }
+  }
+
+  return "";
+}
+
+function looksLikeExplicitInventoryCommand(text) {
+  return /\b(create|add|register|make|update|edit|change|rename|delete|remove|show|list|display|count|summary|dashboard|report)\b/i.test(
+    text
+  );
+}
+
+function normalizeIntentResult(result, latestText) {
+  if (!result || typeof result !== "object") {
+    return { intent: "general_question" };
+  }
+
+  const normalizedText = latestText.trim();
+  const hasExplicitCommand = looksLikeExplicitInventoryCommand(normalizedText);
+  const hasInventoryContext = /\b(customer|customers|product|products|inventory|stock|dashboard|item|items)\b/i.test(
+    normalizedText
+  );
+
+  const needsStrictIntent =
+    [
+      "create_customer",
+      "create_product",
+      "update_customer",
+      "delete_customer",
+      "update_product",
+      "delete_product",
+    ].includes(result.intent);
+
+  if (needsStrictIntent && !hasExplicitCommand && !hasInventoryContext) {
+    return {
+      intent: "general_question",
+    };
+  }
+
+  return result;
+}
+
 /*
 |--------------------------------------------------------------------------
 | INTENT ANALYSIS
@@ -21,6 +68,9 @@ const GROQ_CHAT_MODEL = "llama-3.1-8b-instant";
 async function analyzeUserMessage(
   messages
 ) {
+  const latestText =
+    getLatestUserText(messages);
+
   const completion =
     await groq.chat.completions.create({
       model:
@@ -36,6 +86,10 @@ Your job is to identify the user's intent
 and extract structured data.
 
 Return ONLY valid JSON.
+
+Classify as create/update/delete only when the user clearly asks to manage inventory.
+If the user is greeting, chatting, asking for help, or asking a general question,
+use general_question unless they explicitly ask for a customer/product action.
 
 Possible intents:
 
@@ -214,6 +268,22 @@ Response:
 {
   "intent":"general_question"
 }
+
+User:
+What can you do?
+
+Response:
+{
+  "intent":"general_question"
+}
+
+User:
+How many customers do I have?
+
+Response:
+{
+  "intent":"dashboard_stats"
+}
 `,
         },
 
@@ -231,7 +301,10 @@ Response:
     completion.choices[0]
       .message.content;
 
-  return JSON.parse(content);
+  return normalizeIntentResult(
+    JSON.parse(content),
+    latestText
+  );
 }
 
 /*
@@ -262,6 +335,8 @@ Rules:
 - Do not give unnecessary information.
 - Answer only what the user asked.
 - Avoid robotic responses.
+- Vary your sentence openings and wording.
+- Do not reuse the same phrasing repeatedly.
 - Do not return JSON.
 - Spoken commands may be informal; infer the intended inventory action and entities from voice-style phrasing.
 `,
@@ -300,7 +375,7 @@ async function generateVoiceAudio(
 
 /*
 |--------------------------------------------------------------------------
-| FOLLOW UP QUESTION GENERATION
+| DYNAMIC FOLLOW-UP / STATUS RESPONSES
 |--------------------------------------------------------------------------
 */
 
@@ -311,59 +386,31 @@ async function generateFollowUpQuestion(
 ) {
   const completion =
     await groq.chat.completions.create({
-      model:
-        GROQ_CHAT_MODEL,
-
+      model: GROQ_CHAT_MODEL,
       messages: [
         {
           role: "system",
           content: `
-You are a friendly AI assistant.
+You are a natural-sounding inventory assistant.
 
-Your job is to ask for ONE missing field.
+Ask exactly one short follow-up question for the missing field.
 
 Rules:
-
-- Ask naturally.
-- Ask only for the requested field.
-- Do not mention other fields.
-- Keep it short.
-- Sound human.
+- Sound human, not templated.
+- Do not mention the workflow name.
+- Do not ask about any other field.
+- Vary your wording each time.
+- Keep it brief and conversational.
 
 Examples:
-
-Field: dob
-
-Possible Response:
-"What's Raj's date of birth?"
-
-Field: email
-
-Possible Response:
-"Could you share Raj's email address?"
-
-Field: phone
-
-Possible Response:
-"Thanks. What's Raj's phone number?"
-
-Field: location
-
-Possible Response:
-"Where is Raj located?"
-
-Field: productPrice
-
-Possible Response:
-"What price should I register for this product?"
-
-Field: productQuantity
-
-Possible Response:
-"How many units would you like to add?"
-`,
+- "What’s the customer’s name?"
+- "Could you share the email address?"
+- "What’s the phone number?"
+- "Which location should I use?"
+- "What price should I set?"
+- "How many units should I add?"
+          `,
         },
-
         {
           role: "user",
           content: `
@@ -374,238 +421,79 @@ Field:
 ${fieldName}
 
 Current Data:
-${JSON.stringify(
-  existingData,
-  null,
-  2
-)}
-`,
+${JSON.stringify(existingData, null, 2)}
+          `,
         },
       ],
-
       temperature: 0.9,
     });
 
-  return completion.choices[0]
-    .message.content;
+  return completion.choices[0].message.content;
 }
 
-/*
-|--------------------------------------------------------------------------
-| SUCCESS MESSAGE GENERATION
-|--------------------------------------------------------------------------
-*/
-
-async function generateSuccessMessage(
-  action,
-  data
-) {
+async function generateSuccessMessage(action, data) {
   const completion =
     await groq.chat.completions.create({
-      model:
-        GROQ_CHAT_MODEL,
-
+      model: "llama-3.3-70b-versatile",
       messages: [
         {
           role: "system",
           content: `
-You are an Inventory Management Assistant.
+You are a natural inventory assistant.
 
-Generate a short professional success message.
-
-Examples:
-
-Customer Raj created.
-
-Product Laptop created.
-
-Customer Raj updated.
-
-Product Laptop deleted.
-
-Keep it short.
-`,
-        },
-
-        {
-          role: "user",
-          content: `
-Action:
-${action}
-
-Data:
-${JSON.stringify(data)}
-`,
-        },
-      ],
-
-      temperature: 0.8,
-    });
-
-  return completion.choices[0]
-    .message.content;
-}
-
-/*
-|--------------------------------------------------------------------------
-| FOLLOW UP QUESTION
-|--------------------------------------------------------------------------
-*/
-
-async function generateFollowUpQuestion(
-  workflow,
-  fieldName,
-  existingData
-) {
-  const completion =
-    await groq.chat.completions.create({
-      model:
-        GROQ_CHAT_MODEL,
-
-      messages: [
-        {
-          role: "system",
-          content: `
-You are a professional inventory assistant.
-
-Ask for ONE missing field only.
-
-Be conversational.
-
-Do not ask multiple questions.
-
-Examples:
-
-What's Raj's date of birth?
-
-Could you share Raj's email address?
-
-What's Raj's phone number?
-
-Where is Raj located?
-
-How many units would you like to add?
-
-What price should I register for this product?
-`,
-        },
-
-        {
-          role: "user",
-          content: `
-Workflow:
-${workflow}
-
-Field:
-${fieldName}
-
-Current Data:
-${JSON.stringify(
-  existingData,
-  null,
-  2
-)}
-`,
-        },
-      ],
-
-      temperature: 0.8,
-    });
-
-  return completion.choices[0]
-    .message.content;
-}
-
-/*
-|--------------------------------------------------------------------------
-| SUCCESS MESSAGE
-|--------------------------------------------------------------------------
-*/
-
-async function generateSuccessMessage(
-  action,
-  data
-) {
-  const completion =
-    await groq.chat.completions.create({
-      model:
-        "llama-3.3-70b-versatile",
-
-      messages: [
-        {
-          role: "system",
-          content: `
-Generate a short success message.
-
-Examples:
-
-Customer Raj created successfully.
-
-Product Laptop created successfully.
-
-Keep it concise.
-`,
-        },
-
-        {
-          role: "user",
-          content: `
-Action:
-${action}
-
-Data:
-${JSON.stringify(data)}
-`,
-        },
-      ],
-
-      temperature: 0.7,
-    });
-
-  return completion.choices[0]
-    .message.content;
-}
-
-async function generateConversationalResponse(
-  messages
-) {
-  const completion =
-    await groq.chat.completions.create({
-      model:
-        "llama-3.3-70b-versatile",
-
-      messages: [
-        {
-          role: "system",
-          content: `
-You are an intelligent Inventory Management Assistant.
-
-You can:
-
-- Manage customers
-- Manage products
-- Answer inventory questions
-- Hold natural conversations
-- Remember previous messages from the current chat
+Write a short, friendly success message.
 
 Rules:
-
-- Be conversational.
-- Use previous chat context when relevant.
-- Reply naturally.
-- Do not return JSON.
-- Answer like ChatGPT.
-`,
+- Vary the wording.
+- Do not sound robotic.
+- Keep it to one sentence.
+- Mention the entity name if available.
+          `,
         },
+        {
+          role: "user",
+          content: `
+Action:
+${action}
 
-        ...messages,
+Data:
+${JSON.stringify(data, null, 2)}
+          `,
+        },
       ],
-
-      temperature: 0.8,
+      temperature: 0.9,
     });
 
-  return completion.choices[0]
-    .message.content;
+  return completion.choices[0].message.content;
+}
+
+async function generateConversationalResponse(messages) {
+  const completion =
+    await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        {
+          role: "system",
+          content: `
+You are a warm, natural Inventory Management Assistant.
+
+You can help with customers, products, inventory summaries, and general questions.
+
+Rules:
+- Respond naturally and dynamically.
+- Avoid repetitive phrases.
+- Do not sound scripted.
+- Keep replies concise unless the user asks for detail.
+- If the message is ambiguous, ask one short clarifying question.
+- Do not return JSON.
+          `,
+        },
+        ...messages,
+      ],
+      temperature: 0.9,
+    });
+
+  return completion.choices[0].message.content;
 }
 
 module.exports = {

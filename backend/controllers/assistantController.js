@@ -58,6 +58,18 @@ const PRODUCT_FIELDS = [
   "customerName",
 ];
 
+function shouldResetWorkflowForMessage(message) {
+  const text = (message || "").trim().toLowerCase();
+
+  if (!text || text.startsWith("__action__:")) {
+    return false;
+  }
+
+  return /\b(hi|hello|hey|help|thanks|thank you|what can you do|who are you|how are you|good morning|good afternoon|good evening)\b/i.test(
+    text
+  );
+}
+
 async function chatWithAssistant(req,res) {
   try {
     const {
@@ -113,8 +125,21 @@ async function chatWithAssistant(req,res) {
     ======================================
     */
 
-    const session =
+    let session =
       getSession(sessionId);
+
+    if (
+      session &&
+      shouldResetWorkflowForMessage(
+        latestMessage
+      )
+    ) {
+      clearSession(
+        sessionId
+      );
+
+      session = null;
+    }
 
     if (session) {
   /*
@@ -698,7 +723,11 @@ if (
         ) {
           return res.json({
             reply:
-              "Please tell me the customer's name.",
+              await generateFollowUpQuestion(
+                "create_customer",
+                "customerName",
+                {}
+              ),
           });
         }
 
@@ -738,7 +767,11 @@ if (
         ) {
           return res.json({
             reply:
-              "Please tell me the product name.",
+              await generateFollowUpQuestion(
+                "create_product",
+                "productName",
+                {}
+              ),
           });
         }
 
@@ -782,7 +815,11 @@ if (
       if (!customerName) {
         return res.json({
           reply:
-            "Which customer would you like to update?",
+            await generateFollowUpQuestion(
+              "update_customer",
+              "customerName",
+              {}
+            ),
         });
       }
 
@@ -794,7 +831,9 @@ if (
       if (!customer) {
         return res.json({
           reply:
-            `Customer '${customerName}' was not found.`,
+            await generateResponse(
+              `Tell the user that customer "${customerName}" could not be found. Keep the reply short, natural, and helpful.`
+            ),
         });
       }
 
@@ -844,7 +883,9 @@ if (
       if (!fieldName) {
         return res.json({
           reply:
-            "What would you like to update for this customer?",
+            await generateResponse(
+              `Ask the user what they would like to update for customer "${customerName}". Keep it short and conversational.`
+            ),
         });
       }
 
@@ -864,9 +905,9 @@ if (
 
       return res.json({
         reply:
-          `I found customer '${customerName}'.
-
-    Do you want me to update '${fieldName}' to '${newValue}'?`,
+          await generateResponse(
+            `The user wants to update customer "${customerName}". Ask for confirmation to change "${fieldName}" to "${newValue}". Keep the tone natural and brief.`
+          ),
 
         actions: [
           {
@@ -896,7 +937,11 @@ if (
   if (!customerName) {
     return res.json({
       reply:
-        "Which customer would you like to delete?",
+        await generateFollowUpQuestion(
+          "delete_customer",
+          "customerName",
+          {}
+        ),
     });
   }
 
@@ -908,7 +953,9 @@ if (
   if (!customer) {
     return res.json({
       reply:
-        `Customer '${customerName}' was not found.`,
+        await generateResponse(
+          `Tell the user that customer "${customerName}" was not found. Keep it short and helpful.`
+        ),
     });
   }
 
@@ -926,9 +973,9 @@ if (
 
   return res.json({
     reply:
-      `I found customer '${customerName}'.
-
-Do you want me to permanently delete this customer?`,
+      await generateResponse(
+        `The user wants to delete customer "${customerName}". Ask for a quick confirmation in a natural, human way.`
+      ),
 
     actions: [
       {
@@ -958,7 +1005,11 @@ case "delete_product": {
   if (!productName) {
     return res.json({
       reply:
-        "Which product would you like to delete?",
+        await generateFollowUpQuestion(
+          "delete_product",
+          "productName",
+          {}
+        ),
     });
   }
 
@@ -970,7 +1021,9 @@ case "delete_product": {
   if (!product) {
     return res.json({
       reply:
-        `Product '${productName}' was not found.`,
+        await generateResponse(
+          `Tell the user that product "${productName}" was not found. Keep it short and natural.`
+        ),
     });
   }
 
@@ -988,9 +1041,9 @@ case "delete_product": {
 
   return res.json({
     reply:
-      `I found product '${productName}'.
-
-Do you want me to permanently delete this product?`,
+      await generateResponse(
+        `The user wants to delete product "${productName}". Ask for confirmation in a natural way.`
+      ),
 
     actions: [
       {
@@ -1022,7 +1075,11 @@ Do you want me to permanently delete this product?`,
   if (!productName) {
     return res.json({
       reply:
-        "Which product would you like to update?",
+        await generateFollowUpQuestion(
+          "update_product",
+          "productName",
+          {}
+        ),
     });
   }
 
@@ -1034,7 +1091,9 @@ Do you want me to permanently delete this product?`,
   if (!product) {
     return res.json({
       reply:
-        `Product '${productName}' was not found.`,
+        await generateResponse(
+          `Tell the user that product "${productName}" was not found. Keep the reply short and helpful.`
+        ),
     });
   }
 
@@ -1069,7 +1128,9 @@ Do you want me to permanently delete this product?`,
   if (!fieldName) {
     return res.json({
       reply:
-        "What would you like to update for this product?",
+        await generateResponse(
+          `Ask the user what they want to update for product "${productName}". Keep it short and conversational.`
+        ),
     });
   }
 
@@ -1089,9 +1150,9 @@ Do you want me to permanently delete this product?`,
 
   return res.json({
     reply:
-      `I found product '${productName}'.
-
-Do you want me to update '${fieldName}' to '${newValue}'?`,
+      await generateResponse(
+        `The user wants to update product "${productName}". Ask for confirmation to change "${fieldName}" to "${newValue}". Keep it brief and natural.`
+      ),
 
     actions: [
       {
