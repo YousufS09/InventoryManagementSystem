@@ -1,0 +1,23 @@
+.profileCard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  padding: 12px 18px;
+
+  background: white;
+
+  border-radius: 16px;
+
+  box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+}
+
+.username {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.status {
+  font-size: 13px;
+  color: #10b981;
+}

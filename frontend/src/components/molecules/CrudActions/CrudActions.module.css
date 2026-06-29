@@ -1,0 +1,41 @@
+.actions {
+  display: flex;
+
+  gap: 10px;
+}
+
+.editBtn {
+  border: none;
+
+  background: #2563eb;
+
+  color: white;
+
+  padding: 8px 14px;
+
+  border-radius: 8px;
+
+  cursor: pointer;
+}
+
+.editBtn:hover {
+  background: #1d4ed8;
+}
+
+.deleteBtn {
+  border: none;
+
+  background: #ef4444;
+
+  color: white;
+
+  padding: 8px 14px;
+
+  border-radius: 8px;
+
+  cursor: pointer;
+}
+
+.deleteBtn:hover {
+  background: #dc2626;
+}

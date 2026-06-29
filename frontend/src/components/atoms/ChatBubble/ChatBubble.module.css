@@ -1,0 +1,114 @@
+.messageRow {
+  display: flex;
+
+  width: 100%;
+
+  margin-bottom: 16px;
+}
+
+.userRow {
+  justify-content: flex-end;
+}
+
+.aiRow {
+  justify-content: flex-start;
+}
+
+.messageBubble {
+  max-width: 70%;
+
+  padding: 16px 20px;
+
+  border-radius: 20px;
+
+  font-size: 15px;
+
+  line-height: 1.7;
+
+  word-break: break-word;
+
+  white-space: pre-wrap;
+}
+
+.userBubble {
+  background:
+    linear-gradient(
+      135deg,
+      #2563eb,
+      #3b82f6
+    );
+
+  color: white;
+
+  border-bottom-right-radius: 6px;
+
+  box-shadow:
+    0 10px 25px
+    rgba(
+      37,
+      99,
+      235,
+      0.25
+    );
+}
+
+.aiBubble {
+  background: white;
+
+  color: #0f172a;
+
+  border: 1px solid #e2e8f0;
+
+  border-bottom-left-radius: 6px;
+
+  box-shadow:
+    0 8px 20px
+    rgba(
+      15,
+      23,
+      42,
+      0.06
+    );
+}
+
+.actionContainer {
+  display: flex;
+
+  flex-wrap: wrap;
+
+  gap: 10px;
+
+  margin-top: 12px;
+}
+
+.actionButton {
+  border: none;
+
+  outline: none;
+
+  cursor: pointer;
+
+  padding: 10px 16px;
+
+  border-radius: 12px;
+
+  font-size: 14px;
+
+  font-weight: 500;
+
+  background: #eff6ff;
+
+  color: #2563eb;
+
+  transition: all 0.2s ease;
+}
+
+.actionButton:hover {
+  transform: translateY(-2px);
+
+  background: #dbeafe;
+}
+
+.actionButton:active {
+  transform: translateY(0px);
+}
