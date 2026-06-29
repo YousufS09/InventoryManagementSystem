@@ -113,6 +113,17 @@ async function getProducts(req, res) {
     const productCustomerNameColumn = productColumns.get("customerName");
     const customerNameColumn = customerColumns.get("customerName");
 
+    const hasCustomerIdColumn = typeof customerIdColumn === "string" && customerIdColumn.trim() && customerIdColumn !== "null";
+    const hasProductCustomerNameColumn = typeof productCustomerNameColumn === "string" && productCustomerNameColumn.trim() && productCustomerNameColumn !== "null";
+    const hasCustomerNameColumn = typeof customerNameColumn === "string" && customerNameColumn.trim() && customerNameColumn !== "null";
+    const hasProductNameColumn = typeof nameColumn === "string" && nameColumn.trim() && nameColumn !== "null";
+    const hasPriceColumn = typeof priceColumn === "string" && priceColumn.trim() && priceColumn !== "null";
+    const hasQuantityColumn = typeof quantityColumn === "string" && quantityColumn.trim() && quantityColumn !== "null";
+
+    if (!hasProductNameColumn || !hasPriceColumn || !hasQuantityColumn) {
+      return res.status(500).json({ error: "Products table schema is not compatible with the backend." });
+    }
+
     const productSelect = [
       "p.id",
       `${getColumnExpression(nameColumn, "p")} AS product_name`,
@@ -122,11 +133,14 @@ async function getProducts(req, res) {
 
     let joinClause = "";
 
-    if (customerIdColumn && customerTable && customerNameColumn) {
+    if (hasCustomerIdColumn && customerTable && hasCustomerNameColumn) {
       productSelect.push(`${getColumnExpression(customerIdColumn, "p")} AS customer_id`);
       productSelect.push(`${getColumnExpression(customerNameColumn, "c")} AS customer_name`);
       joinClause = `LEFT JOIN ${quoteIdentifier(customerTable)} c ON p.${quoteIdentifier(customerIdColumn)} = c.id`;
-    } else if (productCustomerNameColumn) {
+    } else if (hasCustomerIdColumn) {
+      productSelect.push(`${getColumnExpression(customerIdColumn, "p")} AS customer_id`);
+      productSelect.push(`NULL AS customer_name`);
+    } else if (hasProductCustomerNameColumn) {
       productSelect.push(`NULL AS customer_id`);
       productSelect.push(`${getColumnExpression(productCustomerNameColumn, "p")} AS customer_name`);
     } else {
