@@ -1,11 +1,15 @@
 ﻿const { getPool } = require("../db");
-const { getProductColumns, getCustomerColumns } = require("../services/schemaService");
+const { buildProductSchema, buildCustomerSchema } = require("../services/schemaService");
 
 async function createProduct(req, res) {
   try {
     const { productName, productPrice, productQuantity, customerId } = req.body;
     const pool = getPool();
-    const columns = await getProductColumns(pool);
+    const { tableName, columns } = await buildProductSchema(pool);
+
+    if (!tableName) {
+      return res.status(500).json({ error: "Products table was not found." });
+    }
 
     const nameColumn = columns.get("productName");
     const priceColumn = columns.get("productPrice");
@@ -18,7 +22,7 @@ async function createProduct(req, res) {
 
     await pool.execute(
       `
-      INSERT INTO products
+      INSERT INTO ${tableName}
       (
         ${nameColumn},
         ${priceColumn},
@@ -40,8 +44,12 @@ async function createProduct(req, res) {
 async function getProducts(req, res) {
   try {
     const pool = getPool();
-    const productColumns = await getProductColumns(pool);
-    const customerColumns = await getCustomerColumns(pool);
+    const { tableName: productTable, columns: productColumns } = await buildProductSchema(pool);
+    const { tableName: customerTable, columns: customerColumns } = await buildCustomerSchema(pool);
+
+    if (!productTable || !customerTable) {
+      return res.status(200).json([]);
+    }
 
     const nameColumn = productColumns.get("productName");
     const priceColumn = productColumns.get("productPrice");
@@ -58,8 +66,8 @@ async function getProducts(req, res) {
         p.${quantityColumn} AS product_quantity,
         p.${customerIdColumn} AS customer_id,
         c.${customerNameColumn} AS customer_name
-      FROM products p
-      JOIN customers c
+      FROM ${productTable} p
+      JOIN ${customerTable} c
         ON p.${customerIdColumn} = c.id
       ORDER BY p.id DESC
       `
@@ -76,14 +84,13 @@ async function deleteProduct(req, res) {
   try {
     const { id } = req.params;
     const pool = getPool();
-    await pool.execute(
-      `
-      DELETE FROM products
-      WHERE id = ?
-      `,
-      [id]
-    );
+    const { tableName } = await buildProductSchema(pool);
 
+    if (!tableName) {
+      return res.status(500).json({ error: "Products table was not found." });
+    }
+
+    await pool.execute(`DELETE FROM ${tableName} WHERE id = ?`, [id]);
     return res.status(200).json({ message: "Product deleted successfully" });
   } catch (error) {
     console.error(error);
@@ -97,7 +104,11 @@ async function updateProduct(req, res) {
     const { productName, productPrice, productQuantity, customerId } = req.body;
 
     const pool = getPool();
-    const columns = await getProductColumns(pool);
+    const { tableName, columns } = await buildProductSchema(pool);
+
+    if (!tableName) {
+      return res.status(500).json({ error: "Products table was not found." });
+    }
 
     const nameColumn = columns.get("productName");
     const priceColumn = columns.get("productPrice");
@@ -106,7 +117,7 @@ async function updateProduct(req, res) {
 
     await pool.execute(
       `
-      UPDATE products
+      UPDATE ${tableName}
       SET
         ${nameColumn} = ?,
         ${priceColumn} = ?,

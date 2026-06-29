@@ -1,5 +1,25 @@
-﻿const customerColumnCache = new Map();
-const productColumnCache = new Map();
+﻿const tableCache = new Map();
+
+async function getExistingTableName(pool, candidates) {
+  const cacheKey = candidates.join("|");
+  if (tableCache.has(cacheKey)) {
+    return tableCache.get(cacheKey);
+  }
+
+  const [rows] = await pool.execute(
+    `
+    SELECT TABLE_NAME
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME IN (${candidates.map(() => "?").join(", ")})
+    `,
+    candidates
+  );
+
+  const existingTable = rows[0]?.TABLE_NAME || null;
+  tableCache.set(cacheKey, existingTable);
+  return existingTable;
+}
 
 async function getTableColumns(pool, tableName) {
   const [rows] = await pool.execute(
@@ -15,69 +35,90 @@ async function getTableColumns(pool, tableName) {
   return rows.map((row) => row.COLUMN_NAME);
 }
 
-async function getCustomerColumns(pool) {
-  if (customerColumnCache.size) {
-    return customerColumnCache;
+async function buildCustomerSchema(pool) {
+  const tableName = await getExistingTableName(pool, ["customers", "customer"]);
+  if (!tableName) {
+    return { tableName: null, columns: new Map() };
   }
 
-  const columns = await getTableColumns(pool, "customers");
-  const hasSnake = columns.includes("customer_name");
-  const hasCamel = columns.includes("customerName");
+  const columns = await getTableColumns(pool, tableName);
+  const schema = new Map();
 
-  customerColumnCache.set(
-    "customerName",
-    hasSnake ? "customer_name" : hasCamel ? "customerName" : null
-  );
-  customerColumnCache.set("dob", columns.includes("dob") ? "dob" : null);
-  customerColumnCache.set("email", columns.includes("email") ? "email" : null);
-  customerColumnCache.set("phone", columns.includes("phone") ? "phone" : null);
-  customerColumnCache.set("location", columns.includes("location") ? "location" : null);
+  const nameColumn = columns.includes("customer_name")
+    ? "customer_name"
+    : columns.includes("customerName")
+      ? "customerName"
+      : null;
 
-  return customerColumnCache;
+  schema.set("tableName", tableName);
+  schema.set("customerName", nameColumn);
+  schema.set("dob", columns.includes("dob") ? "dob" : null);
+  schema.set("email", columns.includes("email") ? "email" : null);
+  schema.set("phone", columns.includes("phone") ? "phone" : null);
+  schema.set("location", columns.includes("location") ? "location" : null);
+
+  return { tableName, columns: schema };
 }
 
-async function getProductColumns(pool) {
-  if (productColumnCache.size) {
-    return productColumnCache;
+async function buildProductSchema(pool) {
+  const tableName = await getExistingTableName(pool, ["products", "product"]);
+  if (!tableName) {
+    return { tableName: null, columns: new Map() };
   }
 
-  const columns = await getTableColumns(pool, "products");
-  const hasSnakeName = columns.includes("product_name");
-  const hasCamelName = columns.includes("productName");
-  const hasSnakePrice = columns.includes("product_price");
-  const hasCamelPrice = columns.includes("productPrice");
-  const hasSnakeQty = columns.includes("product_quantity");
-  const hasCamelQty = columns.includes("productQuantity");
-  const hasSnakeCustomerId = columns.includes("customer_id");
-  const hasCamelCustomerId = columns.includes("customerId");
-  const hasSnakeCustomerName = columns.includes("customer_name");
-  const hasCamelCustomerName = columns.includes("customerName");
+  const columns = await getTableColumns(pool, tableName);
+  const schema = new Map();
 
-  productColumnCache.set(
+  schema.set(
+    "tableName",
+    tableName
+  );
+  schema.set(
     "productName",
-    hasSnakeName ? "product_name" : hasCamelName ? "productName" : null
+    columns.includes("product_name")
+      ? "product_name"
+      : columns.includes("productName")
+        ? "productName"
+        : null
   );
-  productColumnCache.set(
+  schema.set(
     "productPrice",
-    hasSnakePrice ? "product_price" : hasCamelPrice ? "productPrice" : null
+    columns.includes("product_price")
+      ? "product_price"
+      : columns.includes("productPrice")
+        ? "productPrice"
+        : null
   );
-  productColumnCache.set(
+  schema.set(
     "productQuantity",
-    hasSnakeQty ? "product_quantity" : hasCamelQty ? "productQuantity" : null
+    columns.includes("product_quantity")
+      ? "product_quantity"
+      : columns.includes("productQuantity")
+        ? "productQuantity"
+        : null
   );
-  productColumnCache.set(
+  schema.set(
     "customerId",
-    hasSnakeCustomerId ? "customer_id" : hasCamelCustomerId ? "customerId" : null
+    columns.includes("customer_id")
+      ? "customer_id"
+      : columns.includes("customerId")
+        ? "customerId"
+        : null
   );
-  productColumnCache.set(
+  schema.set(
     "customerName",
-    hasSnakeCustomerName ? "customer_name" : hasCamelCustomerName ? "customerName" : null
+    columns.includes("customer_name")
+      ? "customer_name"
+      : columns.includes("customerName")
+        ? "customerName"
+        : null
   );
 
-  return productColumnCache;
+  return { tableName, columns: schema };
 }
 
 module.exports = {
-  getCustomerColumns,
-  getProductColumns,
+  buildCustomerSchema,
+  buildProductSchema,
+  getExistingTableName,
 };

@@ -1,5 +1,5 @@
 ﻿const { getPool } = require("../db");
-const { getCustomerColumns } = require("../services/schemaService");
+const { buildCustomerSchema } = require("../services/schemaService");
 
 function normalizeDate(value) {
   if (!value) {
@@ -28,7 +28,11 @@ async function createCustomer(req, res) {
     }
 
     const pool = getPool();
-    const columns = await getCustomerColumns(pool);
+    const { tableName, columns } = await buildCustomerSchema(pool);
+
+    if (!tableName) {
+      return res.status(500).json({ error: "Customers table was not found." });
+    }
 
     const nameColumn = columns.get("customerName");
     const dobColumn = columns.get("dob");
@@ -40,11 +44,9 @@ async function createCustomer(req, res) {
       return res.status(500).json({ error: "Customers table schema is not compatible with the backend." });
     }
 
-    const normalizedDob = normalizeDate(dob);
-
     await pool.execute(
       `
-      INSERT INTO customers
+      INSERT INTO ${tableName}
       (
         ${nameColumn},
         ${dobColumn},
@@ -54,7 +56,7 @@ async function createCustomer(req, res) {
       )
       VALUES (?, ?, ?, ?, ?)
       `,
-      [customerName, normalizedDob, email, phone, location]
+      [customerName, normalizeDate(dob), email, phone, location]
     );
 
     return res.status(201).json({ message: "Customer created successfully" });
@@ -67,7 +69,12 @@ async function createCustomer(req, res) {
 async function getCustomers(req, res) {
   try {
     const pool = getPool();
-    const columns = await getCustomerColumns(pool);
+    const { tableName, columns } = await buildCustomerSchema(pool);
+
+    if (!tableName) {
+      return res.status(200).json([]);
+    }
+
     const nameColumn = columns.get("customerName");
     const dobColumn = columns.get("dob");
     const emailColumn = columns.get("email");
@@ -83,7 +90,7 @@ async function getCustomers(req, res) {
         ${emailColumn} AS email,
         ${phoneColumn} AS phone,
         ${locationColumn} AS location
-      FROM customers
+      FROM ${tableName}
       ORDER BY id DESC
       `
     );
@@ -98,7 +105,12 @@ async function getCustomers(req, res) {
 async function getAllCustomers(req, res) {
   try {
     const pool = getPool();
-    const columns = await getCustomerColumns(pool);
+    const { tableName, columns } = await buildCustomerSchema(pool);
+
+    if (!tableName) {
+      return res.status(200).json([]);
+    }
+
     const nameColumn = columns.get("customerName");
 
     const [customers] = await pool.execute(
@@ -106,7 +118,7 @@ async function getAllCustomers(req, res) {
       SELECT
         id,
         ${nameColumn} AS customer_name
-      FROM customers
+      FROM ${tableName}
       ORDER BY ${nameColumn}
       `
     );
@@ -121,32 +133,30 @@ async function getAllCustomers(req, res) {
 async function getDashboardStats(req, res) {
   try {
     const pool = getPool();
+    const { tableName: customerTable } = await buildCustomerSchema(pool);
+    const { tableName: productTable } = await buildProductSchema(pool);
 
-    const [[customerCount]] = await pool.execute(`
-      SELECT COUNT(*) AS totalCustomers
-      FROM customers
-    `);
+    const [[customerCount]] = customerTable
+      ? await pool.execute(`SELECT COUNT(*) AS totalCustomers FROM ${customerTable}`)
+      : [{ totalCustomers: 0 }];
 
-    const [[productCount]] = await pool.execute(`
-      SELECT COUNT(*) AS totalProducts
-      FROM products
-    `);
+    const [[productCount]] = productTable
+      ? await pool.execute(`SELECT COUNT(*) AS totalProducts FROM ${productTable}`)
+      : [{ totalProducts: 0 }];
 
-    const [[quantityCount]] = await pool.execute(`
-      SELECT IFNULL(SUM(product_quantity), 0) AS totalQuantity
-      FROM products
-    `);
+    const [[quantityCount]] = productTable
+      ? await pool.execute(`SELECT IFNULL(SUM(product_quantity), 0) AS totalQuantity FROM ${productTable}`)
+      : [{ totalQuantity: 0 }];
 
-    const [[inventoryValue]] = await pool.execute(`
-      SELECT IFNULL(SUM(product_price * product_quantity), 0) AS totalValue
-      FROM products
-    `);
+    const [[inventoryValue]] = productTable
+      ? await pool.execute(`SELECT IFNULL(SUM(product_price * product_quantity), 0) AS totalValue FROM ${productTable}`)
+      : [{ totalValue: 0 }];
 
     res.json({
-      totalCustomers: customerCount.totalCustomers,
-      totalProducts: productCount.totalProducts,
-      totalQuantity: quantityCount.totalQuantity,
-      totalValue: inventoryValue.totalValue,
+      totalCustomers: customerCount.totalCustomers || 0,
+      totalProducts: productCount.totalProducts || 0,
+      totalQuantity: quantityCount.totalQuantity || 0,
+      totalValue: inventoryValue.totalValue || 0,
     });
   } catch (error) {
     console.error(error);
@@ -158,15 +168,13 @@ async function deleteCustomer(req, res) {
   try {
     const { id } = req.params;
     const pool = getPool();
+    const { tableName } = await buildCustomerSchema(pool);
 
-    await pool.execute(
-      `
-      DELETE FROM customers
-      WHERE id = ?
-      `,
-      [id]
-    );
+    if (!tableName) {
+      return res.status(500).json({ error: "Customers table was not found." });
+    }
 
+    await pool.execute(`DELETE FROM ${tableName} WHERE id = ?`, [id]);
     return res.status(200).json({ message: "Customer deleted successfully" });
   } catch (error) {
     console.error(error);
@@ -180,7 +188,11 @@ async function updateCustomer(req, res) {
     const { customerName, dob, email, phone, location } = req.body;
 
     const pool = getPool();
-    const columns = await getCustomerColumns(pool);
+    const { tableName, columns } = await buildCustomerSchema(pool);
+
+    if (!tableName) {
+      return res.status(500).json({ error: "Customers table was not found." });
+    }
 
     const nameColumn = columns.get("customerName");
     const dobColumn = columns.get("dob");
@@ -188,11 +200,9 @@ async function updateCustomer(req, res) {
     const phoneColumn = columns.get("phone");
     const locationColumn = columns.get("location");
 
-    const normalizedDob = normalizeDate(dob);
-
     await pool.execute(
       `
-      UPDATE customers
+      UPDATE ${tableName}
       SET
         ${nameColumn} = ?,
         ${dobColumn} = ?,
@@ -201,7 +211,7 @@ async function updateCustomer(req, res) {
         ${locationColumn} = ?
       WHERE id = ?
       `,
-      [customerName, normalizedDob, email, phone, location, id]
+      [customerName, normalizeDate(dob), email, phone, location, id]
     );
 
     return res.status(200).json({ message: "Customer updated successfully" });

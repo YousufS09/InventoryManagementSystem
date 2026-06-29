@@ -1,9 +1,13 @@
 ﻿const { getPool } = require("../db");
-const { getCustomerColumns, getProductColumns } = require("../services/schemaService");
+const { buildCustomerSchema, buildProductSchema } = require("../services/schemaService");
 
 async function createCustomer(data) {
   const pool = getPool();
-  const columns = await getCustomerColumns(pool);
+  const { tableName, columns } = await buildCustomerSchema(pool);
+
+  if (!tableName) {
+    throw new Error("Customers table was not found.");
+  }
 
   const nameColumn = columns.get("customerName");
   const dobColumn = columns.get("dob");
@@ -11,17 +15,11 @@ async function createCustomer(data) {
   const phoneColumn = columns.get("phone");
   const locationColumn = columns.get("location");
 
-  const {
-    customerName,
-    dob,
-    email,
-    phone,
-    location,
-  } = data;
+  const { customerName, dob, email, phone, location } = data;
 
   const [result] = await pool.execute(
     `
-    INSERT INTO customers
+    INSERT INTO ${tableName}
     (
       ${nameColumn},
       ${dobColumn},
@@ -42,7 +40,11 @@ async function createCustomer(data) {
 
 async function updateCustomer(customerId, data) {
   const pool = getPool();
-  const columns = await getCustomerColumns(pool);
+  const { tableName, columns } = await buildCustomerSchema(pool);
+
+  if (!tableName) {
+    throw new Error("Customers table was not found.");
+  }
 
   const fieldMapping = {
     customerName: columns.get("customerName"),
@@ -69,7 +71,7 @@ async function updateCustomer(customerId, data) {
   values.push(customerId);
 
   const query = `
-    UPDATE customers
+    UPDATE ${tableName}
     SET ${updates.join(", ")}
     WHERE id = ?
   `;
@@ -83,10 +85,15 @@ async function updateCustomer(customerId, data) {
 
 async function deleteCustomer(customerId) {
   const pool = getPool();
+  const { tableName } = await buildCustomerSchema(pool);
+
+  if (!tableName) {
+    throw new Error("Customers table was not found.");
+  }
 
   await pool.execute(
     `
-    DELETE FROM customers
+    DELETE FROM ${tableName}
     WHERE id = ?
     `,
     [customerId]
@@ -99,7 +106,12 @@ async function deleteCustomer(customerId) {
 
 async function getCustomers() {
   const pool = getPool();
-  const columns = await getCustomerColumns(pool);
+  const { tableName, columns } = await buildCustomerSchema(pool);
+
+  if (!tableName) {
+    return [];
+  }
+
   const nameColumn = columns.get("customerName");
   const dobColumn = columns.get("dob");
   const emailColumn = columns.get("email");
@@ -114,7 +126,7 @@ async function getCustomers() {
       ${emailColumn} AS email,
       ${phoneColumn} AS phone,
       ${locationColumn} AS location
-    FROM customers
+    FROM ${tableName}
     ORDER BY id DESC
   `);
 
@@ -123,13 +135,18 @@ async function getCustomers() {
 
 async function findCustomerByName(customerName) {
   const pool = getPool();
-  const columns = await getCustomerColumns(pool);
+  const { tableName, columns } = await buildCustomerSchema(pool);
+
+  if (!tableName) {
+    return undefined;
+  }
+
   const nameColumn = columns.get("customerName");
 
   const [customers] = await pool.execute(
     `
     SELECT *
-    FROM customers
+    FROM ${tableName}
     WHERE ${nameColumn} = ?
     `,
     [customerName]
@@ -140,14 +157,19 @@ async function findCustomerByName(customerName) {
 
 async function getLatestCustomer() {
   const pool = getPool();
-  const columns = await getCustomerColumns(pool);
+  const { tableName, columns } = await buildCustomerSchema(pool);
+
+  if (!tableName) {
+    return undefined;
+  }
+
   const nameColumn = columns.get("customerName");
 
   const [customers] = await pool.execute(`
     SELECT
       id,
       ${nameColumn} AS customer_name
-    FROM customers
+    FROM ${tableName}
     ORDER BY id DESC
     LIMIT 1
   `);
@@ -157,10 +179,15 @@ async function getLatestCustomer() {
 
 async function getCustomerCount() {
   const pool = getPool();
+  const { tableName } = await buildCustomerSchema(pool);
+
+  if (!tableName) {
+    return 0;
+  }
 
   const [[result]] = await pool.execute(`
     SELECT COUNT(*) AS totalCustomers
-    FROM customers
+    FROM ${tableName}
   `);
 
   return result.totalCustomers;
@@ -168,23 +195,22 @@ async function getCustomerCount() {
 
 async function createProduct(data) {
   const pool = getPool();
-  const columns = await getProductColumns(pool);
+  const { tableName, columns } = await buildProductSchema(pool);
+
+  if (!tableName) {
+    throw new Error("Products table was not found.");
+  }
 
   const nameColumn = columns.get("productName");
   const priceColumn = columns.get("productPrice");
   const quantityColumn = columns.get("productQuantity");
   const customerIdColumn = columns.get("customerId");
 
-  const {
-    productName,
-    productPrice,
-    productQuantity,
-    customerId,
-  } = data;
+  const { productName, productPrice, productQuantity, customerId } = data;
 
   const [result] = await pool.execute(
     `
-    INSERT INTO products
+    INSERT INTO ${tableName}
     (
       ${nameColumn},
       ${priceColumn},
@@ -204,7 +230,11 @@ async function createProduct(data) {
 
 async function updateProduct(productId, data) {
   const pool = getPool();
-  const columns = await getProductColumns(pool);
+  const { tableName, columns } = await buildProductSchema(pool);
+
+  if (!tableName) {
+    throw new Error("Products table was not found.");
+  }
 
   const fieldMapping = {
     productName: columns.get("productName"),
@@ -230,7 +260,7 @@ async function updateProduct(productId, data) {
   values.push(productId);
 
   const query = `
-    UPDATE products
+    UPDATE ${tableName}
     SET ${updates.join(", ")}
     WHERE id = ?
   `;
@@ -244,10 +274,15 @@ async function updateProduct(productId, data) {
 
 async function deleteProduct(productId) {
   const pool = getPool();
+  const { tableName } = await buildProductSchema(pool);
+
+  if (!tableName) {
+    throw new Error("Products table was not found.");
+  }
 
   await pool.execute(
     `
-    DELETE FROM products
+    DELETE FROM ${tableName}
     WHERE id = ?
     `,
     [productId]
@@ -260,8 +295,12 @@ async function deleteProduct(productId) {
 
 async function getProducts() {
   const pool = getPool();
-  const productColumns = await getProductColumns(pool);
-  const customerColumns = await getCustomerColumns(pool);
+  const { tableName: productTable, columns: productColumns } = await buildProductSchema(pool);
+  const { tableName: customerTable, columns: customerColumns } = await buildCustomerSchema(pool);
+
+  if (!productTable || !customerTable) {
+    return [];
+  }
 
   const nameColumn = productColumns.get("productName");
   const priceColumn = productColumns.get("productPrice");
@@ -277,8 +316,8 @@ async function getProducts() {
       p.${quantityColumn} AS product_quantity,
       p.${customerIdColumn} AS customer_id,
       c.${customerNameColumn} AS customer_name
-    FROM products p
-    JOIN customers c
+    FROM ${productTable} p
+    JOIN ${customerTable} c
       ON p.${customerIdColumn} = c.id
     ORDER BY p.id DESC
   `);
@@ -288,13 +327,18 @@ async function getProducts() {
 
 async function findProductByName(productName) {
   const pool = getPool();
-  const columns = await getProductColumns(pool);
+  const { tableName, columns } = await buildProductSchema(pool);
+
+  if (!tableName) {
+    return undefined;
+  }
+
   const nameColumn = columns.get("productName");
 
   const [products] = await pool.execute(
     `
     SELECT *
-    FROM products
+    FROM ${tableName}
     WHERE ${nameColumn} = ?
     `,
     [productName]
@@ -305,10 +349,15 @@ async function findProductByName(productName) {
 
 async function getProductCount() {
   const pool = getPool();
+  const { tableName } = await buildProductSchema(pool);
+
+  if (!tableName) {
+    return 0;
+  }
 
   const [[result]] = await pool.execute(`
     SELECT COUNT(*) AS totalProducts
-    FROM products
+    FROM ${tableName}
   `);
 
   return result.totalProducts;
@@ -316,41 +365,44 @@ async function getProductCount() {
 
 async function getDashboardStats() {
   const pool = getPool();
+  const { tableName: customerTable } = await buildCustomerSchema(pool);
+  const { tableName: productTable } = await buildProductSchema(pool);
 
-  const [[customerCount]] = await pool.execute(`
-    SELECT COUNT(*) AS totalCustomers
-    FROM customers
-  `);
+  const [[customerCount]] = customerTable
+    ? await pool.execute(`SELECT COUNT(*) AS totalCustomers FROM ${customerTable}`)
+    : [{ totalCustomers: 0 }];
 
-  const [[productCount]] = await pool.execute(`
-    SELECT COUNT(*) AS totalProducts
-    FROM products
-  `);
+  const [[productCount]] = productTable
+    ? await pool.execute(`SELECT COUNT(*) AS totalProducts FROM ${productTable}`)
+    : [{ totalProducts: 0 }];
 
-  const [[quantityCount]] = await pool.execute(`
-    SELECT IFNULL(SUM(product_quantity), 0) AS totalQuantity
-    FROM products
-  `);
+  const [[quantityCount]] = productTable
+    ? await pool.execute(`SELECT IFNULL(SUM(product_quantity), 0) AS totalQuantity FROM ${productTable}`)
+    : [{ totalQuantity: 0 }];
 
-  const [[inventoryValue]] = await pool.execute(`
-    SELECT IFNULL(SUM(product_price * product_quantity), 0) AS totalValue
-    FROM products
-  `);
+  const [[inventoryValue]] = productTable
+    ? await pool.execute(`SELECT IFNULL(SUM(product_price * product_quantity), 0) AS totalValue FROM ${productTable}`)
+    : [{ totalValue: 0 }];
 
   return {
-    totalCustomers: customerCount.totalCustomers,
-    totalProducts: productCount.totalProducts,
-    totalQuantity: quantityCount.totalQuantity,
-    totalValue: inventoryValue.totalValue,
+    totalCustomers: customerCount.totalCustomers || 0,
+    totalProducts: productCount.totalProducts || 0,
+    totalQuantity: quantityCount.totalQuantity || 0,
+    totalValue: inventoryValue.totalValue || 0,
   };
 }
 
 async function getInventoryValue() {
   const pool = getPool();
+  const { tableName } = await buildProductSchema(pool);
+
+  if (!tableName) {
+    return 0;
+  }
 
   const [[result]] = await pool.execute(`
     SELECT IFNULL(SUM(product_price * product_quantity), 0) AS totalValue
-    FROM products
+    FROM ${tableName}
   `);
 
   return result.totalValue;
