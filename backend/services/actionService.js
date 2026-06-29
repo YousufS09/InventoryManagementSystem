@@ -307,20 +307,53 @@ async function getProducts() {
   const quantityColumn = productColumns.get("productQuantity");
   const customerIdColumn = productColumns.get("customerId");
   const customerNameColumn = customerColumns.get("customerName");
+  const productCustomerNameColumn = productColumns.get("customerName");
 
-  const [products] = await pool.execute(`
-    SELECT
-      p.id,
-      p.${nameColumn} AS product_name,
-      p.${priceColumn} AS product_price,
-      p.${quantityColumn} AS product_quantity,
-      p.${customerIdColumn} AS customer_id,
-      c.${customerNameColumn} AS customer_name
-    FROM ${productTable} p
-    JOIN ${customerTable} c
-      ON p.${customerIdColumn} = c.id
-    ORDER BY p.id DESC
-  `);
+  let query;
+
+  if (customerIdColumn && customerTable && customerNameColumn) {
+    query = `
+      SELECT
+        p.id,
+        p.${nameColumn} AS product_name,
+        p.${priceColumn} AS product_price,
+        p.${quantityColumn} AS product_quantity,
+        p.${customerIdColumn} AS customer_id,
+        c.${customerNameColumn} AS customer_name
+      FROM ${productTable} p
+      LEFT JOIN ${customerTable} c
+        ON p.${customerIdColumn} = c.id
+      ORDER BY p.id DESC
+    `;
+  } else if (productCustomerNameColumn && customerTable && customerNameColumn) {
+    query = `
+      SELECT
+        p.id,
+        p.${nameColumn} AS product_name,
+        p.${priceColumn} AS product_price,
+        p.${quantityColumn} AS product_quantity,
+        c.id AS customer_id,
+        p.${productCustomerNameColumn} AS customer_name
+      FROM ${productTable} p
+      LEFT JOIN ${customerTable} c
+        ON p.${productCustomerNameColumn} = c.${customerNameColumn}
+      ORDER BY p.id DESC
+    `;
+  } else {
+    query = `
+      SELECT
+        p.id,
+        p.${nameColumn} AS product_name,
+        p.${priceColumn} AS product_price,
+        p.${quantityColumn} AS product_quantity,
+        NULL AS customer_id,
+        NULL AS customer_name
+      FROM ${productTable} p
+      ORDER BY p.id DESC
+    `;
+  }
+
+  const [products] = await pool.execute(query);
 
   return products;
 }

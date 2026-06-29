@@ -141,8 +141,14 @@ async function getProducts(req, res) {
       productSelect.push(`${getColumnExpression(customerIdColumn, "p")} AS customer_id`);
       productSelect.push(`NULL AS customer_name`);
     } else if (hasProductCustomerNameColumn) {
-      productSelect.push(`NULL AS customer_id`);
-      productSelect.push(`${getColumnExpression(productCustomerNameColumn, "p")} AS customer_name`);
+      if (customerTable && hasCustomerNameColumn) {
+        productSelect.push(`c.id AS customer_id`);
+        productSelect.push(`${getColumnExpression(productCustomerNameColumn, "p")} AS customer_name`);
+        joinClause = `LEFT JOIN ${quoteIdentifier(customerTable)} c ON p.${quoteIdentifier(productCustomerNameColumn)} = c.${quoteIdentifier(customerNameColumn)}`;
+      } else {
+        productSelect.push(`NULL AS customer_id`);
+        productSelect.push(`${getColumnExpression(productCustomerNameColumn, "p")} AS customer_name`);
+      }
     } else {
       productSelect.push(`NULL AS customer_id`);
       productSelect.push(`NULL AS customer_name`);
