@@ -1,5 +1,10 @@
-﻿const { getPool } = require("../db");
-const { buildCustomerSchema } = require("../services/schemaService");
+const { getPool } = require("../db");
+const {
+  buildCustomerSchema,
+  buildProductSchema,
+  getColumnExpression,
+  quoteIdentifier,
+} = require("../services/schemaService");
 
 function normalizeDate(value) {
   if (!value) {
@@ -46,13 +51,13 @@ async function createCustomer(req, res) {
 
     await pool.execute(
       `
-      INSERT INTO ${tableName}
+      INSERT INTO ${quoteIdentifier(tableName)}
       (
-        ${nameColumn},
-        ${dobColumn},
-        ${emailColumn},
-        ${phoneColumn},
-        ${locationColumn}
+        ${quoteIdentifier(nameColumn)},
+        ${quoteIdentifier(dobColumn)},
+        ${quoteIdentifier(emailColumn)},
+        ${quoteIdentifier(phoneColumn)},
+        ${quoteIdentifier(locationColumn)}
       )
       VALUES (?, ?, ?, ?, ?)
       `,
@@ -85,12 +90,12 @@ async function getCustomers(req, res) {
       `
       SELECT
         id,
-        ${nameColumn} AS customer_name,
-        ${dobColumn} AS dob,
-        ${emailColumn} AS email,
-        ${phoneColumn} AS phone,
-        ${locationColumn} AS location
-      FROM ${tableName}
+        ${getColumnExpression(nameColumn)} AS customer_name,
+        ${getColumnExpression(dobColumn)} AS dob,
+        ${getColumnExpression(emailColumn)} AS email,
+        ${getColumnExpression(phoneColumn)} AS phone,
+        ${getColumnExpression(locationColumn)} AS location
+      FROM ${quoteIdentifier(tableName)}
       ORDER BY id DESC
       `
     );
@@ -117,9 +122,9 @@ async function getAllCustomers(req, res) {
       `
       SELECT
         id,
-        ${nameColumn} AS customer_name
-      FROM ${tableName}
-      ORDER BY ${nameColumn}
+        ${getColumnExpression(nameColumn)} AS customer_name
+      FROM ${quoteIdentifier(tableName)}
+      ORDER BY ${getColumnExpression(nameColumn)}
       `
     );
 
@@ -134,23 +139,31 @@ async function getDashboardStats(req, res) {
   try {
     const pool = getPool();
     const { tableName: customerTable } = await buildCustomerSchema(pool);
-    const { tableName: productTable } = await buildProductSchema(pool);
+    const { tableName: productTable, columns: productColumns } = await buildProductSchema(pool);
 
-    const [[customerCount]] = customerTable
-      ? await pool.execute(`SELECT COUNT(*) AS totalCustomers FROM ${customerTable}`)
-      : [{ totalCustomers: 0 }];
+    const quantityColumn = productColumns.get("productQuantity");
+    const priceColumn = productColumns.get("productPrice");
 
-    const [[productCount]] = productTable
-      ? await pool.execute(`SELECT COUNT(*) AS totalProducts FROM ${productTable}`)
-      : [{ totalProducts: 0 }];
+    let customerCount = { totalCustomers: 0 };
+    let productCount = { totalProducts: 0 };
+    let quantityCount = { totalQuantity: 0 };
+    let inventoryValue = { totalValue: 0 };
 
-    const [[quantityCount]] = productTable
-      ? await pool.execute(`SELECT IFNULL(SUM(product_quantity), 0) AS totalQuantity FROM ${productTable}`)
-      : [{ totalQuantity: 0 }];
+    if (customerTable) {
+      [customerCount] = await pool.execute(`SELECT COUNT(*) AS totalCustomers FROM ${quoteIdentifier(customerTable)}`).then(([rows]) => rows);
+    }
 
-    const [[inventoryValue]] = productTable
-      ? await pool.execute(`SELECT IFNULL(SUM(product_price * product_quantity), 0) AS totalValue FROM ${productTable}`)
-      : [{ totalValue: 0 }];
+    if (productTable) {
+      [productCount] = await pool.execute(`SELECT COUNT(*) AS totalProducts FROM ${quoteIdentifier(productTable)}`).then(([rows]) => rows);
+    }
+
+    if (productTable && quantityColumn) {
+      [quantityCount] = await pool.execute(`SELECT IFNULL(SUM(${quoteIdentifier(quantityColumn)}), 0) AS totalQuantity FROM ${quoteIdentifier(productTable)}`).then(([rows]) => rows);
+    }
+
+    if (productTable && quantityColumn && priceColumn) {
+      [inventoryValue] = await pool.execute(`SELECT IFNULL(SUM(${quoteIdentifier(priceColumn)} * ${quoteIdentifier(quantityColumn)}), 0) AS totalValue FROM ${quoteIdentifier(productTable)}`).then(([rows]) => rows);
+    }
 
     res.json({
       totalCustomers: customerCount.totalCustomers || 0,
@@ -174,7 +187,7 @@ async function deleteCustomer(req, res) {
       return res.status(500).json({ error: "Customers table was not found." });
     }
 
-    await pool.execute(`DELETE FROM ${tableName} WHERE id = ?`, [id]);
+    await pool.execute(`DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ?`, [id]);
     return res.status(200).json({ message: "Customer deleted successfully" });
   } catch (error) {
     console.error(error);
@@ -200,15 +213,19 @@ async function updateCustomer(req, res) {
     const phoneColumn = columns.get("phone");
     const locationColumn = columns.get("location");
 
+    if (!nameColumn || !dobColumn || !emailColumn || !phoneColumn || !locationColumn) {
+      return res.status(500).json({ error: "Customers table schema is not compatible with the backend." });
+    }
+
     await pool.execute(
       `
-      UPDATE ${tableName}
+      UPDATE ${quoteIdentifier(tableName)}
       SET
-        ${nameColumn} = ?,
-        ${dobColumn} = ?,
-        ${emailColumn} = ?,
-        ${phoneColumn} = ?,
-        ${locationColumn} = ?
+        ${quoteIdentifier(nameColumn)} = ?,
+        ${quoteIdentifier(dobColumn)} = ?,
+        ${quoteIdentifier(emailColumn)} = ?,
+        ${quoteIdentifier(phoneColumn)} = ?,
+        ${quoteIdentifier(locationColumn)} = ?
       WHERE id = ?
       `,
       [customerName, normalizeDate(dob), email, phone, location, id]

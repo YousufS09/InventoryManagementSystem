@@ -1,4 +1,18 @@
-﻿const tableCache = new Map();
+const tableCache = new Map();
+const columnCache = new Map();
+
+function quoteIdentifier(identifier) {
+  return `\`${identifier.replace(/`/g, "``")}\``;
+}
+
+function getColumnExpression(columnName, tableAlias = "") {
+  if (!columnName) {
+    return "NULL";
+  }
+
+  const prefix = tableAlias ? `${tableAlias}.` : "";
+  return `${prefix}${quoteIdentifier(columnName)}`;
+}
 
 async function getExistingTableName(pool, candidates) {
   const cacheKey = candidates.join("|");
@@ -22,17 +36,29 @@ async function getExistingTableName(pool, candidates) {
 }
 
 async function getTableColumns(pool, tableName) {
+  const cacheKey = tableName;
+  if (columnCache.has(cacheKey)) {
+    return columnCache.get(cacheKey);
+  }
+
   const [rows] = await pool.execute(
     `
     SELECT COLUMN_NAME
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME = ?
+    ORDER BY ORDINAL_POSITION
     `,
     [tableName]
   );
 
-  return rows.map((row) => row.COLUMN_NAME);
+  const columns = rows.map((row) => row.COLUMN_NAME);
+  columnCache.set(cacheKey, columns);
+  return columns;
+}
+
+function pickColumn(columns, candidates) {
+  return candidates.find((candidate) => columns.includes(candidate)) || null;
 }
 
 async function buildCustomerSchema(pool) {
@@ -44,18 +70,49 @@ async function buildCustomerSchema(pool) {
   const columns = await getTableColumns(pool, tableName);
   const schema = new Map();
 
-  const nameColumn = columns.includes("customer_name")
-    ? "customer_name"
-    : columns.includes("customerName")
-      ? "customerName"
-      : null;
-
   schema.set("tableName", tableName);
-  schema.set("customerName", nameColumn);
-  schema.set("dob", columns.includes("dob") ? "dob" : null);
-  schema.set("email", columns.includes("email") ? "email" : null);
-  schema.set("phone", columns.includes("phone") ? "phone" : null);
-  schema.set("location", columns.includes("location") ? "location" : null);
+  schema.set(
+    "customerName",
+    pickColumn(columns, [
+      "customer_name",
+      "customerName",
+      "full_name",
+      "fullName",
+      "name",
+      "customer",
+    ])
+  );
+  schema.set(
+    "dob",
+    pickColumn(columns, [
+      "dob",
+      "date_of_birth",
+      "birth_date",
+      "birthday",
+    ])
+  );
+  schema.set(
+    "email",
+    pickColumn(columns, ["email", "email_address"])
+  );
+  schema.set(
+    "phone",
+    pickColumn(columns, [
+      "phone",
+      "phone_number",
+      "mobile",
+      "mobile_number",
+    ])
+  );
+  schema.set(
+    "location",
+    pickColumn(columns, [
+      "location",
+      "address",
+      "city",
+      "place",
+    ])
+  );
 
   return { tableName, columns: schema };
 }
@@ -69,49 +126,44 @@ async function buildProductSchema(pool) {
   const columns = await getTableColumns(pool, tableName);
   const schema = new Map();
 
-  schema.set(
-    "tableName",
-    tableName
-  );
+  schema.set("tableName", tableName);
   schema.set(
     "productName",
-    columns.includes("product_name")
-      ? "product_name"
-      : columns.includes("productName")
-        ? "productName"
-        : null
+    pickColumn(columns, ["product_name", "productName", "name"])
   );
   schema.set(
     "productPrice",
-    columns.includes("product_price")
-      ? "product_price"
-      : columns.includes("productPrice")
-        ? "productPrice"
-        : null
+    pickColumn(columns, ["product_price", "productPrice", "price", "unit_price"])
   );
   schema.set(
     "productQuantity",
-    columns.includes("product_quantity")
-      ? "product_quantity"
-      : columns.includes("productQuantity")
-        ? "productQuantity"
-        : null
+    pickColumn(columns, [
+      "product_quantity",
+      "productQuantity",
+      "quantity",
+      "stock",
+      "stock_quantity",
+      "inventory_quantity",
+    ])
   );
   schema.set(
     "customerId",
-    columns.includes("customer_id")
-      ? "customer_id"
-      : columns.includes("customerId")
-        ? "customerId"
-        : null
+    pickColumn(columns, [
+      "customer_id",
+      "customerId",
+      "customerid",
+      "customer",
+      "user_id",
+    ])
   );
   schema.set(
     "customerName",
-    columns.includes("customer_name")
-      ? "customer_name"
-      : columns.includes("customerName")
-        ? "customerName"
-        : null
+    pickColumn(columns, [
+      "customer_name",
+      "customerName",
+      "name",
+      "customer",
+    ])
   );
 
   return { tableName, columns: schema };
@@ -121,4 +173,8 @@ module.exports = {
   buildCustomerSchema,
   buildProductSchema,
   getExistingTableName,
+  getTableColumns,
+  getColumnExpression,
+  pickColumn,
+  quoteIdentifier,
 };

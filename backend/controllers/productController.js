@@ -1,5 +1,35 @@
-﻿const { getPool } = require("../db");
-const { buildProductSchema, buildCustomerSchema } = require("../services/schemaService");
+const { getPool } = require("../db");
+const {
+  buildProductSchema,
+  buildCustomerSchema,
+  getColumnExpression,
+  quoteIdentifier,
+} = require("../services/schemaService");
+
+async function resolveCustomerName(pool, customerId) {
+  const { tableName, columns } = await buildCustomerSchema(pool);
+
+  if (!tableName) {
+    return null;
+  }
+
+  const nameColumn = columns.get("customerName");
+  if (!nameColumn) {
+    return null;
+  }
+
+  const [rows] = await pool.execute(
+    `
+    SELECT ${quoteIdentifier(nameColumn)} AS customer_name
+    FROM ${quoteIdentifier(tableName)}
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [customerId]
+  );
+
+  return rows[0]?.customer_name || null;
+}
 
 async function createProduct(req, res) {
   try {
@@ -15,24 +45,49 @@ async function createProduct(req, res) {
     const priceColumn = columns.get("productPrice");
     const quantityColumn = columns.get("productQuantity");
     const customerIdColumn = columns.get("customerId");
+    const customerNameColumn = columns.get("customerName");
 
-    if (!nameColumn || !priceColumn || !quantityColumn || !customerIdColumn) {
+    if (!nameColumn || !priceColumn || !quantityColumn) {
       return res.status(500).json({ error: "Products table schema is not compatible with the backend." });
     }
 
-    await pool.execute(
-      `
-      INSERT INTO ${tableName}
-      (
-        ${nameColumn},
-        ${priceColumn},
-        ${quantityColumn},
-        ${customerIdColumn}
-      )
-      VALUES (?, ?, ?, ?)
-      `,
-      [productName, productPrice, productQuantity, customerId]
-    );
+    if (customerIdColumn) {
+      await pool.execute(
+        `
+        INSERT INTO ${quoteIdentifier(tableName)}
+        (
+          ${quoteIdentifier(nameColumn)},
+          ${quoteIdentifier(priceColumn)},
+          ${quoteIdentifier(quantityColumn)},
+          ${quoteIdentifier(customerIdColumn)}
+        )
+        VALUES (?, ?, ?, ?)
+        `,
+        [productName, productPrice, productQuantity, customerId]
+      );
+    } else if (customerNameColumn) {
+      const customerName = await resolveCustomerName(pool, customerId);
+
+      if (!customerName) {
+        return res.status(400).json({ error: "Selected customer could not be found." });
+      }
+
+      await pool.execute(
+        `
+        INSERT INTO ${quoteIdentifier(tableName)}
+        (
+          ${quoteIdentifier(nameColumn)},
+          ${quoteIdentifier(priceColumn)},
+          ${quoteIdentifier(quantityColumn)},
+          ${quoteIdentifier(customerNameColumn)}
+        )
+        VALUES (?, ?, ?, ?)
+        `,
+        [productName, productPrice, productQuantity, customerName]
+      );
+    } else {
+      return res.status(500).json({ error: "Products table schema is not compatible with the backend." });
+    }
 
     return res.status(201).json({ message: "Product created successfully" });
   } catch (error) {
@@ -47,7 +102,7 @@ async function getProducts(req, res) {
     const { tableName: productTable, columns: productColumns } = await buildProductSchema(pool);
     const { tableName: customerTable, columns: customerColumns } = await buildCustomerSchema(pool);
 
-    if (!productTable || !customerTable) {
+    if (!productTable) {
       return res.status(200).json([]);
     }
 
@@ -55,20 +110,36 @@ async function getProducts(req, res) {
     const priceColumn = productColumns.get("productPrice");
     const quantityColumn = productColumns.get("productQuantity");
     const customerIdColumn = productColumns.get("customerId");
+    const productCustomerNameColumn = productColumns.get("customerName");
     const customerNameColumn = customerColumns.get("customerName");
+
+    const productSelect = [
+      "p.id",
+      `${getColumnExpression(nameColumn, "p")} AS product_name`,
+      `${getColumnExpression(priceColumn, "p")} AS product_price`,
+      `${getColumnExpression(quantityColumn, "p")} AS product_quantity`,
+    ];
+
+    let joinClause = "";
+
+    if (customerIdColumn && customerTable && customerNameColumn) {
+      productSelect.push(`${getColumnExpression(customerIdColumn, "p")} AS customer_id`);
+      productSelect.push(`${getColumnExpression(customerNameColumn, "c")} AS customer_name`);
+      joinClause = `LEFT JOIN ${quoteIdentifier(customerTable)} c ON p.${quoteIdentifier(customerIdColumn)} = c.id`;
+    } else if (productCustomerNameColumn) {
+      productSelect.push(`NULL AS customer_id`);
+      productSelect.push(`${getColumnExpression(productCustomerNameColumn, "p")} AS customer_name`);
+    } else {
+      productSelect.push(`NULL AS customer_id`);
+      productSelect.push(`NULL AS customer_name`);
+    }
 
     const [products] = await pool.execute(
       `
       SELECT
-        p.id,
-        p.${nameColumn} AS product_name,
-        p.${priceColumn} AS product_price,
-        p.${quantityColumn} AS product_quantity,
-        p.${customerIdColumn} AS customer_id,
-        c.${customerNameColumn} AS customer_name
-      FROM ${productTable} p
-      JOIN ${customerTable} c
-        ON p.${customerIdColumn} = c.id
+        ${productSelect.join(",\n        ")}
+      FROM ${quoteIdentifier(productTable)} p
+      ${joinClause}
       ORDER BY p.id DESC
       `
     );
@@ -90,7 +161,7 @@ async function deleteProduct(req, res) {
       return res.status(500).json({ error: "Products table was not found." });
     }
 
-    await pool.execute(`DELETE FROM ${tableName} WHERE id = ?`, [id]);
+    await pool.execute(`DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ?`, [id]);
     return res.status(200).json({ message: "Product deleted successfully" });
   } catch (error) {
     console.error(error);
@@ -114,19 +185,47 @@ async function updateProduct(req, res) {
     const priceColumn = columns.get("productPrice");
     const quantityColumn = columns.get("productQuantity");
     const customerIdColumn = columns.get("customerId");
+    const customerNameColumn = columns.get("customerName");
 
-    await pool.execute(
-      `
-      UPDATE ${tableName}
-      SET
-        ${nameColumn} = ?,
-        ${priceColumn} = ?,
-        ${quantityColumn} = ?,
-        ${customerIdColumn} = ?
-      WHERE id = ?
-      `,
-      [productName, productPrice, productQuantity, customerId, id]
-    );
+    if (!nameColumn || !priceColumn || !quantityColumn) {
+      return res.status(500).json({ error: "Products table schema is not compatible with the backend." });
+    }
+
+    if (customerIdColumn) {
+      await pool.execute(
+        `
+        UPDATE ${quoteIdentifier(tableName)}
+        SET
+          ${quoteIdentifier(nameColumn)} = ?,
+          ${quoteIdentifier(priceColumn)} = ?,
+          ${quoteIdentifier(quantityColumn)} = ?,
+          ${quoteIdentifier(customerIdColumn)} = ?
+        WHERE id = ?
+        `,
+        [productName, productPrice, productQuantity, customerId, id]
+      );
+    } else if (customerNameColumn) {
+      const customerName = await resolveCustomerName(pool, customerId);
+
+      if (!customerName) {
+        return res.status(400).json({ error: "Selected customer could not be found." });
+      }
+
+      await pool.execute(
+        `
+        UPDATE ${quoteIdentifier(tableName)}
+        SET
+          ${quoteIdentifier(nameColumn)} = ?,
+          ${quoteIdentifier(priceColumn)} = ?,
+          ${quoteIdentifier(quantityColumn)} = ?,
+          ${quoteIdentifier(customerNameColumn)} = ?
+        WHERE id = ?
+        `,
+        [productName, productPrice, productQuantity, customerName, id]
+      );
+    } else {
+      return res.status(500).json({ error: "Products table schema is not compatible with the backend." });
+    }
 
     return res.status(200).json({ message: "Product updated successfully" });
   } catch (error) {

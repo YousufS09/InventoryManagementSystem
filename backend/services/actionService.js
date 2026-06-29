@@ -366,23 +366,30 @@ async function getProductCount() {
 async function getDashboardStats() {
   const pool = getPool();
   const { tableName: customerTable } = await buildCustomerSchema(pool);
-  const { tableName: productTable } = await buildProductSchema(pool);
+  const { tableName: productTable, columns: productColumns } = await buildProductSchema(pool);
+  const priceColumn = productColumns.get("productPrice");
+  const quantityColumn = productColumns.get("productQuantity");
 
-  const [[customerCount]] = customerTable
-    ? await pool.execute(`SELECT COUNT(*) AS totalCustomers FROM ${customerTable}`)
-    : [{ totalCustomers: 0 }];
+  let customerCount = { totalCustomers: 0 };
+  let productCount = { totalProducts: 0 };
+  let quantityCount = { totalQuantity: 0 };
+  let inventoryValue = { totalValue: 0 };
 
-  const [[productCount]] = productTable
-    ? await pool.execute(`SELECT COUNT(*) AS totalProducts FROM ${productTable}`)
-    : [{ totalProducts: 0 }];
+  if (customerTable) {
+    [customerCount] = await pool.execute(`SELECT COUNT(*) AS totalCustomers FROM ${customerTable}`).then(([rows]) => rows);
+  }
 
-  const [[quantityCount]] = productTable
-    ? await pool.execute(`SELECT IFNULL(SUM(product_quantity), 0) AS totalQuantity FROM ${productTable}`)
-    : [{ totalQuantity: 0 }];
+  if (productTable) {
+    [productCount] = await pool.execute(`SELECT COUNT(*) AS totalProducts FROM ${productTable}`).then(([rows]) => rows);
+  }
 
-  const [[inventoryValue]] = productTable
-    ? await pool.execute(`SELECT IFNULL(SUM(product_price * product_quantity), 0) AS totalValue FROM ${productTable}`)
-    : [{ totalValue: 0 }];
+  if (productTable && quantityColumn) {
+    [quantityCount] = await pool.execute(`SELECT IFNULL(SUM(${quantityColumn}), 0) AS totalQuantity FROM ${productTable}`).then(([rows]) => rows);
+  }
+
+  if (productTable && priceColumn && quantityColumn) {
+    [inventoryValue] = await pool.execute(`SELECT IFNULL(SUM(${priceColumn} * ${quantityColumn}), 0) AS totalValue FROM ${productTable}`).then(([rows]) => rows);
+  }
 
   return {
     totalCustomers: customerCount.totalCustomers || 0,
@@ -394,14 +401,16 @@ async function getDashboardStats() {
 
 async function getInventoryValue() {
   const pool = getPool();
-  const { tableName } = await buildProductSchema(pool);
+  const { tableName, columns } = await buildProductSchema(pool);
+  const priceColumn = columns.get("productPrice");
+  const quantityColumn = columns.get("productQuantity");
 
-  if (!tableName) {
+  if (!tableName || !priceColumn || !quantityColumn) {
     return 0;
   }
 
   const [[result]] = await pool.execute(`
-    SELECT IFNULL(SUM(product_price * product_quantity), 0) AS totalValue
+    SELECT IFNULL(SUM(${priceColumn} * ${quantityColumn}), 0) AS totalValue
     FROM ${tableName}
   `);
 

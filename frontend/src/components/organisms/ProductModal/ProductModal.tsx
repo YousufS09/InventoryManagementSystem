@@ -62,7 +62,9 @@ const ProductModal = ({
       );
 
       setCustomerId(
-        product.customer_id.toString()
+        product.customer_id
+          ? product.customer_id.toString()
+          : ""
       );
     }
   }, [product]);
@@ -77,7 +79,11 @@ const ProductModal = ({
         const data =
           await res.json();
 
-        setCustomers(data);
+        setCustomers(
+          Array.isArray(data)
+            ? data
+            : []
+        );
       } catch (error) {
         console.error(error);
       }

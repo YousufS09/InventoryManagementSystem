@@ -30,46 +30,48 @@ const app = express();
 const port =
   process.env.PORT || 4000;
 
-app.use(
-  cors({
-    origin: (
-      origin,
-      callback
-    ) => {
-      if (!origin)
-        return callback(
-          null,
-          true
-        );
+const corsOptions = {
+  origin: (
+    origin,
+    callback
+  ) => {
+    if (!origin) {
+      return callback(
+        null,
+        true
+      );
+    }
 
-      const allowedOrigins = [
-        process.env.FRONTEND_URL,
-        /^http:\/\/localhost(:\d+)?$/,
-        /^http:\/\/127\.0\.0\.1(:\d+)?$/,
-      ].filter(Boolean);
+    const allowedOrigins = [
+      process.env.FRONTEND_URL,
+      /^http:\/\/localhost(:\d+)?$/,
+      /^http:\/\/127\.0\.0\.1(:\d+)?$/,
+    ].filter(Boolean);
 
-      const isAllowed = allowedOrigins.some((entry) => {
-        if (typeof entry === "string") {
-          return entry === origin;
-        }
-
-        return entry.test(origin);
-      });
-
-      if (isAllowed) {
-        callback(null, true);
-      } else {
-        callback(
-          new Error(
-            "Not allowed by CORS"
-          )
-        );
+    const isAllowed = allowedOrigins.some((entry) => {
+      if (typeof entry === "string") {
+        return entry === origin;
       }
-    },
 
-    credentials: true,
-  })
-);
+      return entry.test(origin);
+    });
+
+    if (isAllowed) {
+      callback(null, true);
+      return;
+    }
+
+    callback(
+      new Error(
+        "Not allowed by CORS"
+      )
+    );
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 app.use(express.json());
 
