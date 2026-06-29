@@ -21,7 +21,7 @@ export const deleteItem = async (
     }
 
     toast.success(
-      "Record deleted successfully"
+      "Record deleted successfully" 
     );
 
     return true;

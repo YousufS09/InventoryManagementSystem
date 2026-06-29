@@ -1,11 +1,11 @@
-const Groq = require("groq-sdk");
+﻿const Groq = require("groq-sdk");
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
 const GROQ_TTS_MODEL =
-  "playai-tts";
+  "canopylabs/orpheus-v1-english";
 
 const GROQ_TTS_VOICE =
   "Fritz-PlayAI";
@@ -616,3 +616,4 @@ module.exports = {
   generateSuccessMessage,
   generateVoiceAudio,
 };
+

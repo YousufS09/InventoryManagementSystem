@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "signup-signin-backend",
   "version": "1.0.0",
   "description": "Backend API for signup and signin functionality",
@@ -12,7 +12,7 @@
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
-    "bcrypt": "^5.1.0",
+    "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.18.2",
@@ -24,3 +24,4 @@
     "nodemon": "^2.0.22"
   }
 }
+
