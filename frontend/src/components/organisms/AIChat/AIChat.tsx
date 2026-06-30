@@ -9,7 +9,6 @@ import styles from "./AIChat.module.css";
 import ChatBubble from "../../atoms/ChatBubble/ChatBubble";
 
 import ChatInput from "../../molecules/ChatInput/ChatInput";
-import VoiceCommandBar from "../../molecules/VoiceCommandBar/VoiceCommandBar";
 import { apiFetch } from "../../../services/api";
 
 type ActionButton = {
@@ -319,29 +318,6 @@ const AIChat = () => {
         styles.chatContainer
       }
     >
-      <VoiceCommandBar
-        voiceEnabled={
-          voiceEnabled
-        }
-
-        onToggleVoice={() => {
-          setVoiceEnabled(
-            (current) => !current
-          );
-
-          if (
-            typeof window !== "undefined" &&
-            "speechSynthesis" in window
-          ) {
-            window.speechSynthesis.cancel();
-          }
-        }}
-
-        onTranscript={
-          handleSend
-        }
-      />
-
       <div
         className={
           styles.messagesArea
@@ -382,6 +358,20 @@ const AIChat = () => {
 
       <ChatInput
         onSend={handleSend}
+        voiceEnabled={voiceEnabled}
+        onToggleVoice={() => {
+          setVoiceEnabled(
+            (current) => !current
+          );
+
+          if (
+            typeof window !== "undefined" &&
+            "speechSynthesis" in window
+          ) {
+            window.speechSynthesis.cancel();
+          }
+        }}
+        onTranscript={handleSend}
       />
     </div>
   );
