@@ -46,7 +46,7 @@ const corsOptions = {
       process.env.FRONTEND_URL,
       /^http:\/\/localhost(:\d+)?$/,
       /^http:\/\/127\.0\.0\.1(:\d+)?$/,
-    ].filter(Boolean);
+    ].filter(Boolean);  
 
     const isAllowed = allowedOrigins.some((entry) => {
       if (typeof entry === "string") {

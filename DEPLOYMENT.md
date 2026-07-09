@@ -22,12 +22,12 @@ Set these environment variables in Render:
 - `FRONTEND_URL=https://your-netlify-site.netlify.app`
 - `JWT_SECRET=your-strong-random-secret`
 - `JWT_EXPIRES_IN=2h`
-- `DB_HOST=your-database-host`
-- `DB_PORT=3306`
-- `DB_USER=your-database-user`
-- `DB_PASSWORD=your-database-password`
-- `DB_NAME=your-database-name`
-- `DB_SSL=true` if your MySQL provider requires SSL, otherwise `false`
+- `DB_HOST=mysql-ims-inventory-management-system-123.l.aivencloud.com`
+- `DB_PORT=19875`
+- `DB_USER=avnadmin`
+- `DB_PASSWORD=your-aiven-password`
+- `DB_NAME=defaultdb`
+- `DB_SSL=true`
 - `GROQ_API_KEY=your-groq-api-key` if you want the AI assistant features enabled
 
 After deploy, copy your Render backend URL. It will look like:
@@ -64,3 +64,16 @@ Then trigger a redeploy on Render.
 - In production, auth cookies are sent with `SameSite=None` and `Secure`, which is correct for Netlify <-> Render over HTTPS.
 - If your Render service sleeps on the free plan, the first request may be slow.
 - If the AI assistant is not needed, you can leave `GROQ_API_KEY` unset, but assistant routes may fail.
+
+## 5. Local Aiven CLI test
+
+If you want to test the Aiven MySQL connection from Windows PowerShell, use:
+
+```powershell
+mysql --user=avnadmin --host=mysql-ims-inventory-management-system-123.l.aivencloud.com --port=19875 --ssl-mode=REQUIRED -p defaultdb
+```
+
+Important:
+- Do not type the host by itself as a command.
+- Do not use `--password=<value>` with angle brackets in PowerShell.
+- When prompted for the password, type the real Aiven password and press Enter.

@@ -11,6 +11,20 @@ const DB_SSL = process.env.DB_SSL === "true";
 
 let pool;
 
+async function ensureAuthSchema(pool) {
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS \`user\` (
+      id INT NOT NULL AUTO_INCREMENT,
+      username VARCHAR(100) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      password VARCHAR(255) NOT NULL,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uniq_user_email (email)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+}
+
 async function initDB() {
   if (pool) return pool;
 
@@ -39,6 +53,8 @@ async function initDB() {
     const conn = await pool.getConnection();
     console.log(`Connected to MySQL: ${DB_HOST}:${DB_PORT}/${DB_NAME}`);
     conn.release();
+
+    await ensureAuthSchema(pool);
     return pool;
   } catch (error) {
     console.error("MySQL connection error:", error.message);

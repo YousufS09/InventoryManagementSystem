@@ -10,3 +10,21 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: FRONTEND_URL
+        value: https://your-netlify-site.netlify.app
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 2h
+      - key: DB_HOST
+        value: mysql-ims-inventory-management-system-123.l.aivencloud.com
+      - key: DB_PORT
+        value: 19875
+      - key: DB_USER
+        value: avnadmin
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        value: defaultdb
+      - key: DB_SSL
+        value: true
