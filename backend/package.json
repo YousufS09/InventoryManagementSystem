@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "signup-signin-backend",
   "version": "1.0.0",
   "description": "Backend API for signup and signin functionality",
@@ -16,12 +16,14 @@
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.18.2",
+    "express-rate-limit": "^8.7.4",
     "groq-sdk": "^1.2.1",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
-    "mysql2": "^3.22.4"
+    "mysql2": "^3.22.4",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "nodemon": "^2.0.22"
   }
 }
-

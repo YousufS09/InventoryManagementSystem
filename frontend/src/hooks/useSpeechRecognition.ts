@@ -50,8 +50,15 @@ const useSpeechRecognition = ({
   const [isListening, setIsListening] =
     useState(false);
 
-  const [isSupported, setIsSupported] =
-    useState(true);
+  // Checked once on first render instead of inside the effect.
+  const [isSupported] = useState(() => {
+    const win =
+      window as WindowWithSpeechRecognition;
+    return Boolean(
+      win.SpeechRecognition ||
+        win.webkitSpeechRecognition
+    );
+  });
 
   const [transcript, setTranscript] =
     useState("");
@@ -73,7 +80,6 @@ const useSpeechRecognition = ({
       win.webkitSpeechRecognition;
 
     if (!SpeechRecognitionCtor) {
-      setIsSupported(false);
       return;
     }
 

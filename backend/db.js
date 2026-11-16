@@ -11,18 +11,18 @@ const DB_SSL = process.env.DB_SSL === "true";
 
 let pool;
 
-async function ensureAuthSchema(pool) {
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS \`user\` (
-      id INT NOT NULL AUTO_INCREMENT,
-      username VARCHAR(100) NOT NULL,
-      email VARCHAR(255) NOT NULL,
-      password VARCHAR(255) NOT NULL,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uniq_user_email (email)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
+// Creates the tables the app needs when they do not exist yet.
+// Existing tables are left untouched.
+async function ensureSchema(pool) {
+  const schemaSql = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
+  const statements = schemaSql
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+
+  for (const statement of statements) {
+    await pool.query(statement);
+  }
 }
 
 async function initDB() {
@@ -31,9 +31,7 @@ async function initDB() {
   try {
     const ssl = DB_SSL
       ? {
-          ca: fs.readFileSync(
-            path.join(__dirname, "certs", "aiven-ca.pem")
-          ),
+          ca: fs.readFileSync(path.join(__dirname, "certs", "aiven-ca.pem")),
           rejectUnauthorized: true,
         }
       : undefined;
@@ -47,6 +45,7 @@ async function initDB() {
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
+      dateStrings: ["DATE"],
       ssl,
     });
 
@@ -54,10 +53,13 @@ async function initDB() {
     console.log(`Connected to MySQL: ${DB_HOST}:${DB_PORT}/${DB_NAME}`);
     conn.release();
 
-    await ensureAuthSchema(pool);
+    await ensureSchema(pool);
     return pool;
   } catch (error) {
-    console.error("MySQL connection error:", error.message);
+    pool = undefined;
+    // Connection errors such as ECONNREFUSED arrive as an AggregateError with an
+    // empty message, so log the code as well.
+    console.error("MySQL connection error:", error.code || "", error.message || "");
     throw error;
   }
 }

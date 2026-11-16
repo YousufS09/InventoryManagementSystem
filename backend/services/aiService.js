@@ -5,10 +5,12 @@ const groq = new Groq({
 });
 
 const GROQ_TTS_MODEL =
-  "canopylabs/orpheus-v1-english";
+  process.env.GROQ_TTS_MODEL || "canopylabs/orpheus-v1-english";
 
+// "Fritz-PlayAI" belonged to the retired PlayAI model and is not an Orpheus voice.
+// Orpheus English voices include: autumn, diana, hannah, austin, daniel, troy.
 const GROQ_TTS_VOICE =
-  "Fritz-PlayAI";
+  process.env.GROQ_TTS_VOICE || "hannah";
 
 const GROQ_CHAT_MODEL = "llama-3.1-8b-instant";
 
@@ -199,6 +201,27 @@ Response:
 }
 
 User:
+Rename product Laptop to Notebook
+
+Response:
+{
+  "intent":"update_product",
+  "productName":"Laptop",
+  "productNewName":"Notebook"
+}
+
+User:
+Update customer Raj email to raj@example.com and phone to 9876543210
+
+Response:
+{
+  "intent":"update_customer",
+  "customerName":"Raj",
+  "email":"raj@example.com",
+  "phone":"9876543210"
+}
+
+User:
 Update Laptop quantity to 20
 
 Response:
@@ -301,8 +324,16 @@ Response:
     completion.choices[0]
       .message.content;
 
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // The model occasionally returns malformed JSON; treat it as plain conversation.
+    parsed = null;
+  }
+
   return normalizeIntentResult(
-    JSON.parse(content),
+    parsed,
     latestText
   );
 }

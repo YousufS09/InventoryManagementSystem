@@ -1,49 +1,42 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+
 import InputField from "../../molecules/InputField/InputField";
 import Button from "../../atoms/Button/Button";
 import styles from "./SignInForm.module.css";
-import { apiFetch } from "../../../services/api";
+import { apiRequest, getErrorMessage } from "../../../services/api";
+import { useAuth, type User } from "../../../context/AuthContext";
+import { signinFormSchema, type SigninFormValues } from "../../../validation/schemas";
 
 const SigninForm: React.FC = () => {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { setUser } = useAuth();
+  const [serverError, setServerError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setLoading(true);
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<SigninFormValues>({
+    resolver: zodResolver(signinFormSchema),
+    defaultValues: { email: "", password: "" },
+  });
+
+  const onSubmit = async (values: SigninFormValues) => {
+    setServerError(null);
 
     try {
-      const response = await apiFetch("/api/auth/signin", {
+      const data = await apiRequest<{ user: User }>("/api/auth/signin", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email, password }),
+        body: values,
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Signin failed.");
-      }
-
-      // Optional (recommended): verify session before redirect
-      const profileRes = await apiFetch("/api/auth/profile");
-
-      if (profileRes.ok) {
-        navigate("/dashboard");
-      } else {
-        throw new Error("Session not created properly.");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Signin failed.");
-    } finally {
-      setLoading(false);
+      setUser(data.user);
+      navigate("/dashboard", { replace: true });
+    } catch (error) {
+      setServerError(getErrorMessage(error, "Sign in failed."));
     }
   };
 
@@ -52,34 +45,34 @@ const SigninForm: React.FC = () => {
       <div className={styles.card}>
         <div className={styles.header}>
           <h1 className={styles.title}>Welcome back</h1>
-          <p className={styles.subtitle}>
-            Sign in to continue to your account.
-          </p>
+          <p className={styles.subtitle}>Sign in to continue to your account.</p>
         </div>
 
-        <form onSubmit={handleSubmit} className={styles.form}>
+        <form onSubmit={handleSubmit(onSubmit)} className={styles.form} noValidate>
           <InputField
             label="Email"
             id="email"
             type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+            error={errors.email?.message}
+            {...register("email")}
           />
 
           <InputField
             label="Password"
             id="password"
             type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            error={errors.password?.message}
+            {...register("password")}
           />
 
-          {error && <p className={styles.errorMessage}>{error}</p>}
+          {serverError && <p className={styles.errorMessage}>{serverError}</p>}
 
           <Button
-            text={loading ? "Signing in..." : "Sign In"}
+            text={isSubmitting ? "Signing in..." : "Sign In"}
             type="submit"
-            disabled={loading}
+            disabled={isSubmitting}
           />
 
           <p className={styles.switchText}>

@@ -1,34 +1,18 @@
-import React, { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
-import { apiFetch } from "../services/api";
+
+import { useAuth } from "../context/AuthContext";
 
 type Props = {
-  children: React.ReactNode;
+  children: ReactNode;
 };
 
 const ProtectedRoute = ({ children }: Props) => {
-  const [loading, setLoading] = useState(true);
-  const [isAuth, setIsAuth] = useState(false);
+  const { status } = useAuth();
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const res = await apiFetch("/api/auth/profile");
+  if (status === "loading") return null;
 
-        setIsAuth(res.ok);
-      } catch {
-        setIsAuth(false);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkAuth();
-  }, []);
-
-  if (loading) return null;
-
-  if (!isAuth) {
+  if (status === "anonymous") {
     return <Navigate to="/signin" replace />;
   }
 

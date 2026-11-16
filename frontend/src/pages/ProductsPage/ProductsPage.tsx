@@ -1,54 +1,106 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import styles from "./ProductsPage.module.css";
 import CrudActions from "../../components/molecules/CrudActions/CrudActions";
-import ProductModal from "../../components/organisms/ProductModal/ProductModal";
+import ProductModal, { type Product } from "../../components/organisms/ProductModal/ProductModal";
 import MainLayout from "../../layouts/MainLayout";
-import { apiFetch } from "../../services/api";
-
-type Product = {
-  id: number;
-  product_name: string;
-  product_price: number;
-  product_quantity: number;
-  customer_id: number;
-  customer_name: string;
-};
+import { apiRequest, getErrorMessage } from "../../services/api";
+import { formatCurrency } from "../../utils/format";
 
 const ProductsPage = () => {
   const [showModal, setShowModal] = useState(false);
   const navigate = useNavigate();
   const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
-  const fetchProducts = async () => {
-    try {
-      const res = await apiFetch("/api/products");
-      const data = await res.json();
-
-      if (!res.ok) {
-        console.error("Failed to fetch products:", data);
-        setProducts([]);
-        return;
-      }
-
-      setProducts(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error(error);
-      setProducts([]);
-    }
-  };
+  // Bumping this number re-runs the fetch effect (after a create, update or delete).
+  const [reloadKey, setReloadKey] = useState(0);
+  const fetchProducts = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
-    fetchProducts();
-  }, []);
+    let cancelled = false;
+
+    apiRequest<Product[]>("/api/products")
+      .then((data) => {
+        if (cancelled) return;
+        setProducts(data);
+        setLoadError(null);
+      })
+      .catch((error) => {
+        if (!cancelled) setLoadError(getErrorMessage(error, "Failed to load products."));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  const renderBody = () => {
+    if (loading) {
+      return <p className={styles.emptyMessage}>Loading products...</p>;
+    }
+    if (loadError) {
+      return <p className={styles.emptyMessage}>{loadError}</p>;
+    }
+    if (products.length === 0) {
+      return <p className={styles.emptyMessage}>No products found yet.</p>;
+    }
+
+    return (
+      <table className={styles.customerTable}>
+        <thead>
+          <tr>
+            <th>Product ID</th>
+            <th>Product Name</th>
+            <th>Price</th>
+            <th>Quantity</th>
+            <th>Customer ID</th>
+            <th>Customer Name</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {products.map((product) => (
+            <tr key={product.id}>
+              <td>
+                <span className={styles.productId}>
+                  {`PRD${product.id.toString().padStart(4, "0")}`}
+                </span>
+              </td>
+
+              <td>{product.product_name}</td>
+              <td>{formatCurrency(product.product_price)}</td>
+              <td>{product.product_quantity}</td>
+              <td>{product.customer_id}</td>
+              <td>{product.customer_name}</td>
+              <td>
+                <CrudActions
+                  id={product.id}
+                  endpoint="products"
+                  refreshData={fetchProducts}
+                  onEdit={() => {
+                    setSelectedProduct(product);
+                    setShowModal(true);
+                  }}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
 
   return (
     <MainLayout>
       <div className={styles.container}>
-        {/* Header */}
-
         <div className={styles.header}>
           <div>
             <h1 className={styles.title}>Products</h1>
@@ -83,63 +135,12 @@ const ProductsPage = () => {
           </button>
         </div>
 
-        {/* Products Table */}
-
-        <div className={styles.tableContainer}>
-          {products.length === 0 ? (
-            <p className={styles.emptyMessage}>No products found yet.</p>
-          ) : (
-            <table className={styles.customerTable}>
-              <thead>
-                <tr>
-                  <th>Product ID</th>
-                  <th>Product Name</th>
-                  <th>Price</th>
-                  <th>Quantity</th>
-                  <th>Customer ID</th>
-                  <th>Customer Name</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {products.map((product) => (
-                  <tr key={product.id}>
-                    <td>
-                      <span className={styles.productId}>
-                        {`PRD${product.id.toString().padStart(4, "0")}`}
-                      </span>
-                    </td>
-
-                    <td>{product.product_name}</td>
-                    <td>₹{product.product_price}</td>
-                    <td>{product.product_quantity}</td>
-                    <td>{product.customer_id}</td>
-                    <td>{product.customer_name}</td>
-                    <td>
-                      <CrudActions
-                        id={product.id}
-                        endpoint="products"
-                        refreshData={fetchProducts}
-                        onEdit={() => {
-                          setSelectedProduct(product);
-                          setShowModal(true);
-                        }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* Product Modal */}
+        <div className={styles.tableContainer}>{renderBody()}</div>
 
         {showModal && (
           <ProductModal
             product={selectedProduct}
-            refreshData={fetchProducts}
+            onSaved={fetchProducts}
             onClose={() => {
               setShowModal(false);
               setSelectedProduct(null);

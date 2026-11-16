@@ -1,10 +1,9 @@
 const jwt = require("jsonwebtoken");
 const { createUser, authenticateUser, getUserByEmail } = require("../services/authService");
+const { jwtSecret, jwtExpiresIn, isProduction } = require("../config");
+const { validate, signupSchema, signinSchema } = require("../utils/validation");
 
 function getCookieOptions() {
-  const isProduction =
-    process.env.NODE_ENV === "production";
-
   return {
     httpOnly: true,
     secure: isProduction,
@@ -15,46 +14,41 @@ function getCookieOptions() {
 
 function createToken(user) {
   const payload = { id: user.id, email: user.email, username: user.username };
-  const secret = process.env.JWT_SECRET || "secret-key";
-  const expiresIn = process.env.JWT_EXPIRES_IN || "2h";
-
-  return jwt.sign(payload, secret, { expiresIn });
+  return jwt.sign(payload, jwtSecret, { expiresIn: jwtExpiresIn });
 }
 
 async function signup(req, res) {
+  const { data, error } = validate(signupSchema, req.body);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
   try {
-    const { username, email, password } = req.body;
-
-    if (!username || !email || !password) {
-      return res.status(400).json({ error: "Username, email, and password are required." });
-    }
-
-    const existingUser = await getUserByEmail(email);
+    const existingUser = await getUserByEmail(data.email);
     if (existingUser) {
       return res.status(409).json({ error: "An account with that email already exists." });
     }
 
-    const user = await createUser({ username, email, password });
+    const user = await createUser(data);
     const token = createToken(user);
 
     res.cookie("token", token, getCookieOptions());
 
-    res.status(201).json({ user: { id: user.id, username: user.username, email: user.email } });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to create account." });
+    return res.status(201).json({ user: { id: user.id, username: user.username, email: user.email } });
+  } catch (err) {
+    console.error("Signup error:", err);
+    return res.status(500).json({ error: "Failed to create account." });
   }
 }
-  
+
 async function signin(req, res) {
+  const { data, error } = validate(signinSchema, req.body);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
   try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required." });
-    }
-
-    const user = await authenticateUser(email, password);
+    const user = await authenticateUser(data.email, data.password);
     if (!user) {
       return res.status(401).json({ error: "Invalid email or password." });
     }
@@ -62,23 +56,21 @@ async function signin(req, res) {
     const token = createToken(user);
     res.cookie("token", token, getCookieOptions());
 
-    res.status(200).json({ user: { id: user.id, username: user.username, email: user.email } });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to sign in." });
+    return res.status(200).json({ user: { id: user.id, username: user.username, email: user.email } });
+  } catch (err) {
+    console.error("Signin error:", err);
+    return res.status(500).json({ error: "Failed to sign in." });
   }
 }
 
 function profile(req, res) {
-  return res.status(200).json({ user: req.user });
+  const { id, username, email } = req.user;
+  return res.status(200).json({ user: { id, username, email } });
 }
 
 function logout(req, res) {
-  res.clearCookie("token", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-  });
+  const { maxAge, ...clearOptions } = getCookieOptions();
+  res.clearCookie("token", clearOptions);
   return res.status(200).json({ message: "Logged out successfully." });
 }
 

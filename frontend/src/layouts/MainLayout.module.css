@@ -48,7 +48,15 @@
 
   border-radius: 50%;
 
-  object-fit: cover;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 18px;
 }
 
 .profileName {
@@ -89,6 +97,7 @@
   .avatar {
     width: 42px;
     height: 42px;
+    font-size: 15px;
   }
 
   .profileName {

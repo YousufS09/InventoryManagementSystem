@@ -1,50 +1,45 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { toast } from "react-toastify";
+
 import InputField from "../../molecules/InputField/InputField";
 import Button from "../../atoms/Button/Button";
 import styles from "./SignUpForm.module.css";
-import { apiFetch } from "../../../services/api";
+import { apiRequest, getErrorMessage } from "../../../services/api";
+import { useAuth, type User } from "../../../context/AuthContext";
+import { signupFormSchema, type SignupFormValues } from "../../../validation/schemas";
 
 const SignupForm: React.FC = () => {
   const navigate = useNavigate();
-  const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { setUser } = useAuth();
+  const [serverError, setServerError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<SignupFormValues>({
+    resolver: zodResolver(signupFormSchema),
+    defaultValues: { username: "", email: "", password: "", confirmPassword: "" },
+  });
 
-    if (password !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-
-    setLoading(true);
+  const onSubmit = async ({ username, email, password }: SignupFormValues) => {
+    setServerError(null);
 
     try {
-      const response = await apiFetch("/api/auth/signup", {
+      // The backend signs the new user in (sets the auth cookie), so go straight to the dashboard.
+      const data = await apiRequest<{ user: User }>("/api/auth/signup", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ username, email, password }),
+        body: { username, email, password },
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Signup failed.");
-      }
-
-      navigate("/signin");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Signup failed.");
-    } finally {
-      setLoading(false);
+      setUser(data.user);
+      toast.success("Account created");
+      navigate("/dashboard", { replace: true });
+    } catch (error) {
+      setServerError(getErrorMessage(error, "Sign up failed."));
     }
   };
 
@@ -55,15 +50,47 @@ const SignupForm: React.FC = () => {
           <h1 className={styles.title}>Create your account</h1>
         </div>
 
-        <form onSubmit={handleSubmit} className={styles.form}>
-          <InputField label="Username" id="username" value={username} onChange={(e) => setUsername(e.target.value)} />
-          <InputField label="Email" id="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <InputField label="Password" id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <InputField label="Confirm Password" id="confirmPassword" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+        <form onSubmit={handleSubmit(onSubmit)} className={styles.form} noValidate>
+          <InputField
+            label="Username"
+            id="username"
+            autoComplete="username"
+            error={errors.username?.message}
+            {...register("username")}
+          />
+          <InputField
+            label="Email"
+            id="email"
+            type="email"
+            autoComplete="email"
+            error={errors.email?.message}
+            {...register("email")}
+          />
+          <InputField
+            label="Password"
+            id="password"
+            type="password"
+            autoComplete="new-password"
+            placeholder="At least 8 characters, with a letter and a number"
+            error={errors.password?.message}
+            {...register("password")}
+          />
+          <InputField
+            label="Confirm Password"
+            id="confirmPassword"
+            type="password"
+            autoComplete="new-password"
+            error={errors.confirmPassword?.message}
+            {...register("confirmPassword")}
+          />
 
-          {error && <p className={styles.errorMessage}>{error}</p>}
+          {serverError && <p className={styles.errorMessage}>{serverError}</p>}
 
-          <Button text={loading ? "Signing up..." : "Sign Up"} type="submit" disabled={loading} />
+          <Button
+            text={isSubmitting ? "Signing up..." : "Sign Up"}
+            type="submit"
+            disabled={isSubmitting}
+          />
 
           <p className={styles.switchText}>
             Already have an account? <Link to="/signin">Sign in</Link>

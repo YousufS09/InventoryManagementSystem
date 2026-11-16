@@ -1,0 +1,8 @@
+# Repository-wide safety net. backend/ and frontend/ have their own .gitignore files too.
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db

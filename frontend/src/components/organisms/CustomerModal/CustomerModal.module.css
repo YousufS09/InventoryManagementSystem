@@ -70,6 +70,21 @@
   border-color: #2563eb;
 }
 
+.formGroup input[aria-invalid="true"] {
+  border-color: #dc2626;
+}
+
+.error {
+  margin: 6px 0 0;
+  color: #dc2626;
+  font-size: 13px;
+}
+
+.saveBtn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .actions {
   display: flex;
 

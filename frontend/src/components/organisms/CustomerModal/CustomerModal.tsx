@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "react-toastify";
 
 import styles from "./CustomerModal.module.css";
-import { apiFetch } from "../../../services/api";
+import { apiRequest, getErrorMessage } from "../../../services/api";
+import { customerFormSchema, type CustomerFormValues } from "../../../validation/schemas";
 
-type Customer = {
+export type Customer = {
   id: number;
   customer_name: string;
   dob: string;
@@ -14,188 +16,86 @@ type Customer = {
 };
 
 type CustomerModalProps = {
-  onClose: () => void;
   customer?: Customer | null;
+  onClose: () => void;
+  onSaved: () => void;
 };
 
-const CustomerModal = ({
-  onClose,
-  customer,
-}: CustomerModalProps) => {
-  const [customerName, setCustomerName] =
-    useState(
-      customer?.customer_name || ""
-    );
+const CustomerModal = ({ customer, onClose, onSaved }: CustomerModalProps) => {
+  const isEditMode = Boolean(customer);
 
-  const [dob, setDob] =
-    useState(
-      customer?.dob?.split("T")[0] || ""
-    );
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<CustomerFormValues>({
+    resolver: zodResolver(customerFormSchema),
+    defaultValues: {
+      customerName: customer?.customer_name ?? "",
+      dob: customer?.dob?.split("T")[0] ?? "",
+      email: customer?.email ?? "",
+      phone: customer?.phone ?? "",
+      location: customer?.location ?? "",
+    },
+  });
 
-  const [email, setEmail] =
-    useState(customer?.email || "");
-
-  const [phone, setPhone] =
-    useState(customer?.phone || "");
-
-  const [location, setLocation] =
-    useState(customer?.location || "");
-
-  const handleSave = async () => {
+  const onSubmit = async (values: CustomerFormValues) => {
     try {
-      const isEditMode =
-        !!customer;
+      await apiRequest(isEditMode ? `/api/customers/${customer!.id}` : "/api/customers", {
+        method: isEditMode ? "PUT" : "POST",
+        body: values,
+      });
 
-      const url = isEditMode
-        ? `/api/customers/${customer?.id}`
-        : "/api/customers";
-
-      const method =
-        isEditMode
-          ? "PUT"
-          : "POST";
-
-      const response =
-        await apiFetch(url, {
-          method,
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify({
-            customerName,
-            dob,
-            email,
-            phone,
-            location,
-          }),
-        });
-
-      if (!response.ok) {
-        throw new Error(
-          isEditMode
-            ? "Failed to update customer"
-            : "Failed to create customer"
-        );
-      }
-
-      toast.success(
-        isEditMode
-          ? "Customer updated successfully"
-          : "Customer added successfully"
-      );
-
+      toast.success(isEditMode ? "Customer updated successfully" : "Customer added successfully");
+      onSaved();
       onClose();
     } catch (error) {
-      console.error(error);
-
       toast.error(
-        customer
-          ? "Failed to update customer"
-          : "Failed to add customer"
+        getErrorMessage(error, isEditMode ? "Failed to update customer" : "Failed to add customer")
       );
     }
   };
 
+  const field = (
+    name: keyof CustomerFormValues,
+    label: string,
+    type: string,
+    placeholder?: string
+  ) => (
+    <div className={styles.formGroup}>
+      <label htmlFor={`customer-${name}`}>{label}</label>
+      <input
+        id={`customer-${name}`}
+        type={type}
+        placeholder={placeholder}
+        aria-invalid={Boolean(errors[name])}
+        {...register(name)}
+      />
+      {errors[name] && <p className={styles.error}>{errors[name]?.message}</p>}
+    </div>
+  );
+
   return (
     <div className={styles.overlay}>
-      <div className={styles.modal}>
-        <h2>
-          {customer
-            ? "Edit Customer"
-            : "Add Customer"}
-        </h2>
+      <form className={styles.modal} onSubmit={handleSubmit(onSubmit)} noValidate>
+        <h2>{isEditMode ? "Edit Customer" : "Add Customer"}</h2>
 
-        <div className={styles.formGroup}>
-          <label>Customer Name</label>
-
-          <input
-            type="text"
-            placeholder="Enter customer name"
-            value={customerName}
-            onChange={(e) =>
-              setCustomerName(
-                e.target.value
-              )
-            }
-          />
-        </div>
-
-        <div className={styles.formGroup}>
-          <label>Date of Birth</label>
-
-          <input
-            type="date"
-            value={dob}
-            onChange={(e) =>
-              setDob(e.target.value)
-            }
-          />
-        </div>
-
-        <div className={styles.formGroup}>
-          <label>Email</label>
-
-          <input
-            type="email"
-            placeholder="Enter email"
-            value={email}
-            onChange={(e) =>
-              setEmail(
-                e.target.value
-              )
-            }
-          />
-        </div>
-
-        <div className={styles.formGroup}>
-          <label>Phone Number</label>
-
-          <input
-            type="text"
-            placeholder="Enter phone number"
-            value={phone}
-            onChange={(e) =>
-              setPhone(
-                e.target.value
-              )
-            }
-          />
-        </div>
-
-        <div className={styles.formGroup}>
-          <label>Location</label>
-
-          <input
-            type="text"
-            placeholder="Enter location"
-            value={location}
-            onChange={(e) =>
-              setLocation(
-                e.target.value
-              )
-            }
-          />
-        </div>
+        {field("customerName", "Customer Name", "text", "Enter customer name")}
+        {field("dob", "Date of Birth", "date")}
+        {field("email", "Email", "email", "Enter email")}
+        {field("phone", "Phone Number", "tel", "Enter phone number")}
+        {field("location", "Location", "text", "Enter location")}
 
         <div className={styles.actions}>
-          <button
-            className={styles.cancelBtn}
-            onClick={onClose}
-          >
+          <button type="button" className={styles.cancelBtn} onClick={onClose}>
             Cancel
           </button>
 
-          <button
-            className={styles.saveBtn}
-            onClick={handleSave}
-          >
-            {customer
-              ? "Update Customer"
-              : "Save Customer"}
+          <button type="submit" className={styles.saveBtn} disabled={isSubmitting}>
+            {isSubmitting ? "Saving..." : isEditMode ? "Update Customer" : "Save Customer"}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 };

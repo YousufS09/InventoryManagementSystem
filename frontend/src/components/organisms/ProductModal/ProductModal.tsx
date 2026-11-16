@@ -1,320 +1,171 @@
-import styles from "./ProductModal.module.css";
 import { useEffect, useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "react-toastify";
-import { apiFetch } from "../../../services/api";
-type Customer = {
+
+import styles from "./ProductModal.module.css";
+import { apiRequest, getErrorMessage } from "../../../services/api";
+import { productFormSchema, type ProductFormValues } from "../../../validation/schemas";
+
+type CustomerOption = {
   id: number;
   customer_name: string;
 };
 
-type Product = {
+export type Product = {
   id: number;
   product_name: string;
   product_price: number;
   product_quantity: number;
   customer_id: number;
+  customer_name: string | null;
 };
 
 type Props = {
-  onClose: () => void;
-  refreshData: () => void;
   product?: Product | null;
+  onClose: () => void;
+  onSaved: () => void;
 };
 
-const ProductModal = ({
-  onClose,
-  refreshData,
-  product,
-}: Props) => {
-  const [customers, setCustomers] =
-    useState<Customer[]>([]);
+const ProductModal = ({ product, onClose, onSaved }: Props) => {
+  const isEditMode = Boolean(product);
+  const [customers, setCustomers] = useState<CustomerOption[]>([]);
+  const [customersLoading, setCustomersLoading] = useState(true);
 
-  const [productName, setProductName] =
-    useState("");
-
-  const [productPrice, setProductPrice] =
-    useState("");
-
-  const [
-    productQuantity,
-    setProductQuantity,
-  ] = useState("");
-
-  const [customerId, setCustomerId] =
-    useState("");
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<ProductFormValues>({
+    resolver: zodResolver(productFormSchema),
+    defaultValues: {
+      productName: product?.product_name ?? "",
+      productPrice: product ? String(product.product_price) : "",
+      productQuantity: product ? String(product.product_quantity) : "",
+      customerId: product?.customer_id ? String(product.customer_id) : "",
+    },
+  });
 
   useEffect(() => {
-    fetchCustomers();
+    apiRequest<CustomerOption[]>("/api/customers/allCustomers")
+      .then(setCustomers)
+      .catch((error) => toast.error(getErrorMessage(error, "Failed to load customers")))
+      .finally(() => setCustomersLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (product) {
-      setProductName(
-        product.product_name
-      );
-
-      setProductPrice(
-        product.product_price.toString()
-      );
-
-      setProductQuantity(
-        product.product_quantity.toString()
-      );
-
-      setCustomerId(
-        product.customer_id
-          ? product.customer_id.toString()
-          : ""
-      );
-    }
-  }, [product]);
-
-  const fetchCustomers =
-    async () => {
-      try {
-        const res = await apiFetch(
-          "/api/customers/allCustomers"
-        );
-
-        const data =
-          await res.json();
-
-        setCustomers(
-          Array.isArray(data)
-            ? data
-            : []
-        );
-      } catch (error) {
-        console.error(error);
-      }
-    };
-
-  const handleSubmit =
-    async () => {
+  const onSubmit = async (values: ProductFormValues) => {
     try {
-      const url = product
-          ? `/api/products/${product.id}`
-          : "/api/products";
+      await apiRequest(isEditMode ? `/api/products/${product!.id}` : "/api/products", {
+        method: isEditMode ? "PUT" : "POST",
+        body: {
+          productName: values.productName,
+          productPrice: Number(values.productPrice),
+          productQuantity: Number(values.productQuantity),
+          customerId: Number(values.customerId),
+        },
+      });
 
-        const method =
-          product
-            ? "PUT"
-            : "POST";
-
-        const res = await apiFetch(
-          url,
-          {
-            method,
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify({
-              productName,
-              productPrice,
-              productQuantity,
-              customerId,
-            }),
-          }
-        );
-
-        if (!res.ok) {
-          throw new Error(
-            "Failed to save product"
-          );
-        }
-
-        toast.success(
-          product
-            ? "Product updated successfully"
-            : "Product added successfully"
-        );
-
-        refreshData();
-
-        onClose();
-      } catch (error) {
-        console.error(error);
-
-        toast.error(
-          "Failed to save product"
-        );
-      }
-    };
+      toast.success(isEditMode ? "Product updated successfully" : "Product added successfully");
+      onSaved();
+      onClose();
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to save product"));
+    }
+  };
 
   return (
-    <div
-      className={styles.modalOverlay}
-    >
-      <div
-        className={styles.modal}
-      >
-        <h2 className={styles.title}>
-          {product
-            ? "Edit Product"
-            : "Add Product"}
-        </h2>
+    <div className={styles.modalOverlay}>
+      <div className={styles.modal}>
+        <h2 className={styles.title}>{isEditMode ? "Edit Product" : "Add Product"}</h2>
 
-        <p
-          className={styles.subtitle}
-        >
-          Enter product information
-        </p>
+        <p className={styles.subtitle}>Enter product information</p>
 
-        <div className={styles.form}>
-          <div
-            className={
-              styles.formGroup
-            }
-          >
-            <label
-              className={styles.label}
-            >
+        <form className={styles.form} onSubmit={handleSubmit(onSubmit)} noValidate>
+          <div className={styles.formGroup}>
+            <label htmlFor="product-name" className={styles.label}>
               Product Name
             </label>
-
             <input
+              id="product-name"
               type="text"
-              value={productName}
-              onChange={(e) =>
-                setProductName(
-                  e.target.value
-                )
-              }
               placeholder="Enter product name"
-              className={
-                styles.input
-              }
+              className={styles.input}
+              aria-invalid={Boolean(errors.productName)}
+              {...register("productName")}
             />
+            {errors.productName && <p className={styles.error}>{errors.productName.message}</p>}
           </div>
 
-          <div
-            className={
-              styles.formGroup
-            }
-          >
-            <label
-              className={styles.label}
-            >
-              Product Price
+          <div className={styles.formGroup}>
+            <label htmlFor="product-price" className={styles.label}>
+              Product Price (₹)
             </label>
-
             <input
+              id="product-price"
               type="number"
-              value={productPrice}
-              onChange={(e) =>
-                setProductPrice(
-                  e.target.value
-                )
-              }
+              min="0.01"
+              step="0.01"
               placeholder="Enter price"
-              className={
-                styles.input
-              }
+              className={styles.input}
+              aria-invalid={Boolean(errors.productPrice)}
+              {...register("productPrice")}
             />
+            {errors.productPrice && <p className={styles.error}>{errors.productPrice.message}</p>}
           </div>
 
-          <div
-            className={
-              styles.formGroup
-            }
-          >
-            <label
-              className={styles.label}
-            >
+          <div className={styles.formGroup}>
+            <label htmlFor="product-quantity" className={styles.label}>
               Product Quantity
             </label>
-
             <input
+              id="product-quantity"
               type="number"
-              value={
-                productQuantity
-              }
-              onChange={(e) =>
-                setProductQuantity(
-                  e.target.value
-                )
-              }
+              min="0"
+              step="1"
               placeholder="Enter quantity"
-              className={
-                styles.input
-              }
+              className={styles.input}
+              aria-invalid={Boolean(errors.productQuantity)}
+              {...register("productQuantity")}
             />
+            {errors.productQuantity && (
+              <p className={styles.error}>{errors.productQuantity.message}</p>
+            )}
           </div>
 
-          <div
-            className={
-              styles.formGroup
-            }
-          >
-            <label
-              className={styles.label}
-            >
+          <div className={styles.formGroup}>
+            <label htmlFor="product-customer" className={styles.label}>
               Customer
             </label>
-
             <select
-              value={customerId}
-              onChange={(e) =>
-                setCustomerId(
-                  e.target.value
-                )
-              }
-              className={
-                styles.select
-              }
+              id="product-customer"
+              className={styles.select}
+              disabled={customersLoading}
+              aria-invalid={Boolean(errors.customerId)}
+              {...register("customerId")}
             >
-              <option value="">
-                Select Customer
-              </option>
-
-              {customers.map(
-                (customer) => (
-                  <option
-                    key={
-                      customer.id
-                    }
-                    value={
-                      customer.id
-                    }
-                  >
-                    {
-                      customer.customer_name
-                    }
-                  </option>
-                )
-              )}
+              <option value="">{customersLoading ? "Loading customers..." : "Select Customer"}</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.customer_name} (#{customer.id})
+                </option>
+              ))}
             </select>
+            {errors.customerId && <p className={styles.error}>{errors.customerId.message}</p>}
+            {!customersLoading && customers.length === 0 && (
+              <p className={styles.error}>Add a customer first; every product belongs to a customer.</p>
+            )}
           </div>
 
-          <div
-            className={
-              styles.buttonGroup
-            }
-          >
-            <button
-              className={
-                styles.cancelBtn
-              }
-              onClick={onClose}
-            >
+          <div className={styles.buttonGroup}>
+            <button type="button" className={styles.cancelBtn} onClick={onClose}>
               Cancel
             </button>
 
-            <button
-              className={
-                styles.saveBtn
-              }
-              onClick={
-                handleSubmit
-              }
-            >
-              {product
-                ? "Update Product"
-                : "Save Product"}
+            <button type="submit" className={styles.saveBtn} disabled={isSubmitting}>
+              {isSubmitting ? "Saving..." : isEditMode ? "Update Product" : "Save Product"}
             </button>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   );

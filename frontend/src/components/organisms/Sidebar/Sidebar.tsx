@@ -5,14 +5,11 @@ import {
 } from "react-router-dom";
 
 import styles from "./Sidebar.module.css";
-import { apiFetch } from "../../../services/api";
+import { useAuth } from "../../../context/AuthContext";
 
 import {
   MdDashboard,
-  MdShoppingCart,
   MdPeople,
-  MdAttachMoney,
-  MdCampaign,
   MdLogout,
   MdChevronLeft,
   MdChevronRight,
@@ -72,35 +69,16 @@ const Sidebar = () => {
       path: "/customers",
     },
     {
-      icon: <MdShoppingCart />,
-      label: "Shop",
-      path: "/shop",
-    },
-    {
-      icon: <MdAttachMoney />,
-      label: "Income",
-      path: "/income",
-    },
-    {
-      icon: <MdCampaign />,
-      label: "Promote",
-      path: "/promote",
-    },
-    {
       icon: <MdSmartToy />,
       label: "AI Assistant",
       path: "/assistant",
     },
   ];
 
+  const { logout } = useAuth();
+
   const handleLogout = async () => {
-    try {
-      await apiFetch("/api/auth/logout", {
-        method: "POST",
-      });
-    } catch (error) {
-      console.error(error);
-    }
+    await logout();
 
     navigate("/signin", {
       replace: true,

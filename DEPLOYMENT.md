@@ -20,7 +20,7 @@ Set these environment variables in Render:
 
 - `NODE_ENV=production`
 - `FRONTEND_URL=https://your-netlify-site.netlify.app`
-- `JWT_SECRET=your-strong-random-secret`
+- `JWT_SECRET` — required, at least 32 random characters. The server refuses to start without it. `render.yaml` generates one automatically.
 - `JWT_EXPIRES_IN=2h`
 - `DB_HOST=mysql-ims-inventory-management-system-123.l.aivencloud.com`
 - `DB_PORT=19875`
@@ -28,7 +28,8 @@ Set these environment variables in Render:
 - `DB_PASSWORD=your-aiven-password`
 - `DB_NAME=defaultdb`
 - `DB_SSL=true`
-- `GROQ_API_KEY=your-groq-api-key` if you want the AI assistant features enabled
+- `GROQ_API_KEY=your-groq-api-key` if you want the AI assistant features enabled. Set it only in the Render dashboard, never in a committed file.
+- `GROQ_TTS_VOICE` (optional) — Orpheus voice for spoken replies, default `hannah`
 
 After deploy, copy your Render backend URL. It will look like:
 
@@ -48,7 +49,7 @@ Set this environment variable in Netlify:
 
 - `VITE_API_BASE_URL=https://your-render-backend.onrender.com`
 
-The included [`netlify.toml`](/C:/Users/Mohamed%20Yousuf/Downloads/Professional/InventoryManagementSystem/netlify.toml) already handles SPA routing.
+The included [`netlify.toml`](netlify.toml) already handles SPA routing.
 
 ## 3. Update backend CORS after Netlify is live
 
@@ -63,7 +64,10 @@ Then trigger a redeploy on Render.
 - The frontend sends requests with `credentials: "include"`, so the backend must keep `FRONTEND_URL` exactly matched to the Netlify URL.
 - In production, auth cookies are sent with `SameSite=None` and `Secure`, which is correct for Netlify <-> Render over HTTPS.
 - If your Render service sleeps on the free plan, the first request may be slow.
-- If the AI assistant is not needed, you can leave `GROQ_API_KEY` unset, but assistant routes may fail.
+- If the AI assistant is not needed, you can leave `GROQ_API_KEY` unset; the assistant then replies with an error message.
+- All `/api/customers`, `/api/products`, `/api/dashboard` and `/api/assistant` routes require a signed-in user.
+- The backend creates the `user`, `customers` and `products` tables on startup if they are missing (see `backend/schema.sql`).
+- `.env` files are git-ignored. Keep real secrets only in local `.env` files and in the Render/Netlify dashboards.
 
 ## 5. Local Aiven CLI test
 

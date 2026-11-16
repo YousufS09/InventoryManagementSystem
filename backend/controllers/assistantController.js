@@ -1,1257 +1,503 @@
-const {
-  analyzeUserMessage,
-  generateResponse,
-  generateConversationalResponse,
-  generateFollowUpQuestion,
-  generateSuccessMessage,
-  generateVoiceAudio,
-} = require(
-  "../services/aiService"
-);
+const { z } = require("zod");
 
-const {
-  createCustomer,
-  updateCustomer,
-  deleteCustomer,
+const ai = require("../services/aiService");
+const customerService = require("../services/customerService");
+const productService = require("../services/productService");
+const { getDashboardStats } = require("../services/dashboardService");
+const { getSession, saveSession, clearSession } = require("../services/sessionService");
+const { validate, fields } = require("../utils/validation");
 
-  createProduct,
-  updateProduct,
-  deleteProduct,
+// Only the most recent messages are sent to the LLM, so token cost stays bounded.
+const MAX_HISTORY = 12;
+// Lists larger than this are truncated before being given to the LLM.
+const MAX_LIST_ROWS = 50;
+const ACTION_PREFIX = "__ACTION__:";
 
-  getCustomers,
-  getProducts,
-  getDashboardStats,
+const requestSchema = z.object({
+  sessionId: z.string().trim().min(1).max(100),
+  voiceOutput: z.boolean().optional().default(false),
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().max(2000),
+      })
+    )
+    .min(1),
+});
 
-  findCustomerByName,
-  findProductByName,
-} = require(
-  "../services/actionService"
-);
+const FIELD_LABELS = {
+  customerName: "name",
+  dob: "date of birth",
+  email: "email",
+  phone: "phone",
+  location: "location",
+  productName: "name",
+  productPrice: "price",
+  productQuantity: "quantity",
+};
 
-const {
-  getSession,
-  saveSession,
-  updateSessionData,
-  clearSession,
-} = require(
-  "../services/sessionService"
-);
+// Fields collected one at a time when creating a record.
+// For create_product, "customerName" is the existing customer the product belongs to.
+const CREATE_FLOWS = {
+  create_customer: ["customerName", "dob", "email", "phone", "location"],
+  create_product: ["productName", "productPrice", "productQuantity", "customerName"],
+};
 
-const {
-  normalizeDate,
-} = require(
-  "../utils/dateUtils"
-);
+// Maps fields the LLM extracts for updates to the fields stored in the database.
+const UPDATE_FIELDS = {
+  customer: {
+    customerNewName: "customerName",
+    dob: "dob",
+    email: "email",
+    phone: "phone",
+    location: "location",
+  },
+  product: {
+    productNewName: "productName",
+    productPrice: "productPrice",
+    productQuantity: "productQuantity",
+  },
+};
 
-const CUSTOMER_FIELDS = [
-  "customerName",
-  "dob",
-  "email",
-  "phone",
-  "location",
+const UPDATE_ACTIONS = [
+  { id: "confirm_update", label: "✅ Confirm Update" },
+  { id: "cancel_update", label: "❌ Cancel" },
 ];
 
-const PRODUCT_FIELDS = [
-  "productName",
-  "productPrice",
-  "productQuantity",
-  "customerName",
+const DELETE_ACTIONS = [
+  { id: "confirm_delete", label: "🗑 Confirm Delete" },
+  { id: "cancel_delete", label: "❌ Cancel" },
 ];
 
-function shouldResetWorkflowForMessage(message) {
-  const text = (message || "").trim().toLowerCase();
-
-  if (!text || text.startsWith("__action__:")) {
-    return false;
-  }
-
+function isSmallTalk(message) {
   return /\b(hi|hello|hey|help|thanks|thank you|what can you do|who are you|how are you|good morning|good afternoon|good evening)\b/i.test(
-    text
+    message
   );
 }
 
-async function chatWithAssistant(req,res) {
-  try {
-    const {
-      messages,
-      sessionId,
-      voiceOutput = false,
-    } = req.body;
+function isCancel(message) {
+  return /^(cancel|stop|abort|never ?mind|forget it)[.!]?$/i.test(message.trim());
+}
 
-    const latestMessage =
-      messages[
-        messages.length - 1
-      ].content;
+function isBlank(value) {
+  return value === undefined || value === null || value === "";
+}
 
-    const originalJson =
-      res.json.bind(res);
+// Voice and chat answers often wrap numbers in words ("50,000 rupees"); keep just the number.
+function extractNumber(value) {
+  if (typeof value === "number") {
+    return value;
+  }
+  const match = String(value).replace(/,/g, "").match(/-?\d+(\.\d+)?/);
+  return match ? match[0] : String(value);
+}
 
-    res.json = async (
-      payload
-    ) => {
-      if (
-        voiceOutput &&
-        payload &&
-        payload.reply &&
-        !payload.error &&
-        !payload.audioBase64
-      ) {
-        try {
-          const audioBuffer =
-            await generateVoiceAudio(
-              payload.reply
-            );
+function validateField(field, raw) {
+  const value =
+    field === "productPrice" || field === "productQuantity"
+      ? extractNumber(raw)
+      : String(raw);
+  return validate(fields[field], value);
+}
 
-          payload.audioBase64 =
-            audioBuffer.toString(
-              "base64"
-            );
-        } catch (ttsError) {
-          console.error(
-            "Groq TTS failed:",
-            ttsError
-          );
-        }
-      }
+function formatValue(field, value) {
+  return field === "productPrice" ? `₹${Number(value).toLocaleString("en-IN")}` : `"${value}"`;
+}
 
-      return originalJson(
-        payload
-      );
+function describeChanges(changes) {
+  return Object.entries(changes)
+    .map(([field, value]) => `${FIELD_LABELS[field]} to ${formatValue(field, value)}`)
+    .join(", ");
+}
+
+/*
+|--------------------------------------------------------------------------
+| Record lookup
+|--------------------------------------------------------------------------
+| A reference can be a name ("Raj") or an ID ("#12" / "12"). Duplicate names
+| are reported back so the user can pick one by ID, instead of silently
+| acting on the first match.
+*/
+
+async function resolveRecord(kind, reference) {
+  const text = String(reference ?? "").trim();
+  const service = kind === "customer" ? customerService : productService;
+  const nameKey = kind === "customer" ? "customer_name" : "product_name";
+
+  const idMatch = text.match(/^#?(\d+)$/);
+  if (idMatch) {
+    const record =
+      kind === "customer"
+        ? await service.getCustomerById(Number(idMatch[1]))
+        : await service.getProductById(Number(idMatch[1]));
+    return record
+      ? { record, name: record[nameKey] }
+      : { error: `I couldn't find a ${kind} with ID ${idMatch[1]}.` };
+  }
+
+  const matches =
+    kind === "customer"
+      ? await service.findCustomersByName(text)
+      : await service.findProductsByName(text);
+
+  if (matches.length === 0) {
+    return { error: `I couldn't find a ${kind} named "${text}".` };
+  }
+
+  if (matches.length > 1) {
+    const ids = matches.map((match) => `#${match.id}`).join(", ");
+    return {
+      error: `There are ${matches.length} ${kind}s named "${text}" (${ids}). Please refer to one by ID, for example "${kind} ${ids.split(", ")[0]}".`,
     };
-
-    /*
-    ======================================
-    ACTIVE SESSION
-    ======================================
-    */
-
-    let session =
-      getSession(sessionId);
-
-    if (
-      session &&
-      shouldResetWorkflowForMessage(
-        latestMessage
-      )
-    ) {
-      clearSession(
-        sessionId
-      );
-
-      session = null;
-    }
-
-    if (session) {
-  /*
-  ======================================
-  UPDATE CUSTOMER - ACTION HANDLER
-  ======================================
-  */
-
-  if (
-    session.workflow ===
-    "update_customer_confirmation"
-  ) {
-    if (
-      latestMessage ===
-      "__ACTION__:confirm_update"
-    ) {
-      const customer =
-        await findCustomerByName(
-          session.data.customerName
-        );
-
-      if (!customer) {
-        clearSession(
-          sessionId
-        );
-
-        return res.json({
-          reply:
-            "Customer not found.",
-        });
-      }
-
-      const updateData =
-        {};
-
-      updateData[
-        session.data.fieldName
-      ] =
-        session.data.newValue;
-
-      await updateCustomer(
-        customer.id,
-        updateData
-      );
-
-      clearSession(
-        sessionId
-      );
-
-      return res.json({
-        reply:
-          "Customer updated successfully.",
-      });
-    }
-
-    if (
-      latestMessage ===
-      "__ACTION__:cancel_update"
-    ) {
-      clearSession(
-        sessionId
-      );
-
-      return res.json({
-        reply:
-          "Update cancelled.",
-      });
-    }
   }
 
-  /*
-======================================
-UPDATE PRODUCT - ACTION HANDLER
-======================================
-*/
-
-if (
-  session.workflow ===
-  "update_product_confirmation"
-) {
-  if (
-    latestMessage ===
-    "__ACTION__:confirm_update"
-  ) {
-    const product =
-      await findProductByName(
-        session.data.productName
-      );
-
-    if (!product) {
-      clearSession(
-        sessionId
-      );
-
-      return res.json({
-        reply:
-          "Product not found.",
-      });
-    }
-
-    const updateData =
-      {};
-
-    updateData[
-      session.data.fieldName
-    ] =
-      session.data.newValue;
-
-    await updateProduct(
-      product.id,
-      updateData
-    );
-
-    clearSession(
-      sessionId
-    );
-
-    return res.json({
-      reply:
-        "Product updated successfully.",
-    });
-  }
-
-  if (
-    latestMessage ===
-    "__ACTION__:cancel_update"
-  ) {
-    clearSession(
-      sessionId
-    );
-
-    return res.json({
-      reply:
-        "Product update cancelled.",
-    });
-  }
+  return { record: matches[0], name: matches[0][nameKey] };
 }
 
 /*
-======================================
-DELETE CUSTOMER - ACTION HANDLER
-======================================
+|--------------------------------------------------------------------------
+| Create flows (ask for one missing field at a time)
+|--------------------------------------------------------------------------
 */
 
-if (
-  session.workflow ===
-  "delete_customer_confirmation"
-) {
-
-  if (
-    latestMessage ===
-    "__ACTION__:confirm_delete"
-  ) {
-    const customer =
-      await findCustomerByName(
-        session.data.customerName
-      );
-
-    if (!customer) {
-      clearSession(
-        sessionId
-      );
-
-      return res.json({
-        reply:
-          "Customer not found.",
-      });
+async function acceptField(workflow, field, raw) {
+  if (workflow === "create_product" && field === "customerName") {
+    const { record, name, error } = await resolveRecord("customer", raw);
+    if (error) {
+      return { error };
     }
-
-    await deleteCustomer(
-      customer.id
-    );
-
-    clearSession(
-      sessionId
-    );
-
-    return res.json({
-      reply:
-        "Customer deleted successfully.",
-    });
+    return { values: { customerName: name, customerId: record.id } };
   }
 
-  if (
-    latestMessage ===
-    "__ACTION__:cancel_delete"
-  ) {
-    clearSession(
-      sessionId
-    );
+  const { data, error } = validateField(field, raw);
+  return error ? { error } : { values: { [field]: data } };
+}
 
-    return res.json({
-      reply:
-        "Delete operation cancelled.",
-    });
+function nextMissingField(workflow, data) {
+  return CREATE_FLOWS[workflow].find((field) => data[field] === undefined);
+}
+
+async function advanceCreateFlow(key, session) {
+  const field = nextMissingField(session.workflow, session.data);
+
+  if (field) {
+    saveSession(key, session);
+    return {
+      reply: await ai.generateFollowUpQuestion(session.workflow, field, session.data),
+    };
   }
+
+  clearSession(key);
+
+  if (session.workflow === "create_customer") {
+    const customerId = await customerService.createCustomer(session.data);
+    return {
+      reply: await ai.generateSuccessMessage("create_customer", { ...session.data, customerId }),
+    };
+  }
+
+  const productId = await productService.createProduct(session.data);
+  return {
+    reply: await ai.generateSuccessMessage("create_product", { ...session.data, productId }),
+  };
+}
+
+async function startCreateFlow(key, workflow, aiResult) {
+  const data = {};
+  const problems = [];
+
+  // Keep every field the user already gave in the first message ("Create product Laptop price 500 ...").
+  for (const field of CREATE_FLOWS[workflow]) {
+    if (isBlank(aiResult[field])) {
+      continue;
+    }
+    const { values, error } = await acceptField(workflow, field, aiResult[field]);
+    if (error) {
+      problems.push(error);
+    } else {
+      Object.assign(data, values);
+    }
+  }
+
+  const result = await advanceCreateFlow(key, { workflow, data });
+  if (problems.length > 0) {
+    result.reply = `${problems.join(" ")} ${result.reply}`;
+  }
+  return result;
+}
+
+async function continueCreateFlow(key, session, message) {
+  const field = nextMissingField(session.workflow, session.data);
+  const { values, error } = await acceptField(session.workflow, field, message);
+
+  if (error) {
+    saveSession(key, session);
+    return { reply: `${error} Please try again, or say "cancel" to stop.` };
+  }
+
+  Object.assign(session.data, values);
+  return advanceCreateFlow(key, session);
 }
 
 /*
-======================================
-DELETE PRODUCT - ACTION HANDLER
-======================================
+|--------------------------------------------------------------------------
+| Update / delete (always confirmed with buttons before running)
+|--------------------------------------------------------------------------
 */
 
-if (
-  session.workflow ===
-  "delete_product_confirmation"
-) {
-  if (
-    latestMessage ===
-    "__ACTION__:confirm_delete"
-  ) {
-    const product =
-      await findProductByName(
-        session.data.productName
-      );
-
-    if (!product) {
-      clearSession(
-        sessionId
-      );
-
-      return res.json({
-        reply:
-          "Product not found.",
-      });
-    }
-
-    await deleteProduct(
-      product.id
-    );
-
-    clearSession(
-      sessionId
-    );
-
-    return res.json({
-      reply:
-        "Product deleted successfully.",
-    });
-  }
-
-  if (
-    latestMessage ===
-    "__ACTION__:cancel_delete"
-  ) {
-    clearSession(
-      sessionId
-    );
-
-    return res.json({
-      reply:
-        "Delete operation cancelled.",
-    });
-  }
-}
-  /*
-  --------------------------------------
-  CUSTOMER WORKFLOW
-  --------------------------------------
-  */
-
-  if (
-    session.workflow ===
-    "create_customer"
-  ) {
-    const data =
-      session.data;
-
-    if (!data.dob) {
-      const formattedDob =
-        normalizeDate(
-          latestMessage
-        );
-
-      if (!formattedDob) {
-        return res.json({
-          reply:
-            "I couldn't understand that date. Please enter a valid date of birth.",
-        });
-      }
-
-      updateSessionData(
-        sessionId,
-        {
-          dob: formattedDob,
-        }
-      );
-
-      const updated =
-        getSession(
-          sessionId
-        );
-
-      const question =
-        await generateFollowUpQuestion(
-          "create_customer",
-          "email",
-          updated.data
-        );
-
-      return res.json({
-        reply: question,
-      });
-    }
-
-    if (!data.email) {
-      updateSessionData(
-        sessionId,
-        {
-          email:
-            latestMessage,
-        }
-      );
-
-      const updated =
-        getSession(
-          sessionId
-        );
-
-      const question =
-        await generateFollowUpQuestion(
-          "create_customer",
-          "phone",
-          updated.data
-        );
-
-      return res.json({
-        reply: question,
-      });
-    }
-
-    if (!data.phone) {
-      updateSessionData(
-        sessionId,
-        {
-          phone:
-            latestMessage,
-        }
-      );
-
-      const updated =
-        getSession(
-          sessionId
-        );
-
-      const question =
-        await generateFollowUpQuestion(
-          "create_customer",
-          "location",
-          updated.data
-        );
-
-      return res.json({
-        reply: question,
-      });
-    }
-
-    if (!data.location) {
-      updateSessionData(
-        sessionId,
-        {
-          location:
-            latestMessage,
-        }
-      );
-
-      const updated =
-        getSession(
-          sessionId
-        );
-
-      const result =
-        await createCustomer(
-          updated.data
-        );
-
-      clearSession(
-        sessionId
-      );
-
-      const reply =
-        await generateSuccessMessage(
-          "create_customer",
-          {
-            ...updated.data,
-            customerId:
-              result.customerId,
-          }
-        );
-
-      return res.json({
-        reply,
-      });
-    }
-  }
-
-  /*
-  --------------------------------------
-  PRODUCT WORKFLOW
-  --------------------------------------
-  */
-
-  if (
-    session.workflow ===
-    "create_product"
-  ) {
-    const data =
-      session.data;
-
-    if (
-      !data.productPrice
-    ) {
-      updateSessionData(
-        sessionId,
-        {
-          productPrice:
-            Number(
-              latestMessage
-            ),
-        }
-      );
-
-      const updated =
-        getSession(
-          sessionId
-        );
-
-      const question =
-        await generateFollowUpQuestion(
-          "create_product",
-          "productQuantity",
-          updated.data
-        );
-
-      return res.json({
-        reply: question,
-      });
-    }
-
-    if (
-      !data.productQuantity
-    ) {
-      updateSessionData(
-        sessionId,
-        {
-          productQuantity:
-            Number(
-              latestMessage
-            ),
-        }
-      );
-
-      const updated =
-        getSession(
-          sessionId
-        );
-
-      const question =
-        await generateFollowUpQuestion(
-          "create_product",
-          "customerName",
-          updated.data
-        );
-
-      return res.json({
-        reply: question,
-      });
-    }
-
-    if (
-      !data.customerName
-    ) {
-      updateSessionData(
-        sessionId,
-        {
-          customerName:
-            latestMessage,
-        }
-      );
-
-      const updated =
-        getSession(
-          sessionId
-        );
-
-      const customer =
-        await findCustomerByName(
-          updated.data
-            .customerName
-        );
-
-      if (!customer) {
-        clearSession(
-          sessionId
-        );
-
-        return res.json({
-          reply:
-            "I couldn't find that customer in the database.",
-        });
-      }
-
-      const result =
-        await createProduct({
-          productName:
-            updated.data
-              .productName,
-
-          productPrice:
-            updated.data
-              .productPrice,
-
-          productQuantity:
-            updated.data
-              .productQuantity,
-
-          customerId:
-            customer.id,
-        });
-
-      clearSession(
-        sessionId
-      );
-
-      const reply =
-        await generateSuccessMessage(
-          "create_product",
-          {
-            ...updated.data,
-            productId:
-              result.productId,
-          }
-        );
-
-      return res.json({
-        reply,
-      });
-    }
-  }
-}
-
-    /*
-    ======================================
-    NEW REQUEST
-    ======================================
-    */
-
-    const aiResult =
-      await analyzeUserMessage(
-        messages
-      );
-
-    console.log(
-      "AI Result:",
-      aiResult
-    );
-
-    console.log(
-      "AI Result (Formatted):"
-    );
-
-    console.log(
-      JSON.stringify(
-        aiResult,
-        null,
-        2
-      )
-    );
-
-    switch (
-      aiResult.intent
-    ) {
-      case "create_customer": {
-        const {
-          customerName,
-        } = aiResult;
-
-        if (
-          !customerName
-        ) {
-          return res.json({
-            reply:
-              await generateFollowUpQuestion(
-                "create_customer",
-                "customerName",
-                {}
-              ),
-          });
-        }
-
-        saveSession(
-          sessionId,
-          {
-            workflow:
-              "create_customer",
-
-            data: {
-              customerName,
-            },
-          }
-        );
-
-        const question =
-          await generateFollowUpQuestion(
-            "create_customer",
-            "dob",
-            {
-              customerName,
-            }
-          );
-
-        return res.json({
-          reply: question,
-        });
-      }
-
-      case "create_product": {
-        const {
-          productName,
-        } = aiResult;
-
-        if (
-          !productName
-        ) {
-          return res.json({
-            reply:
-              await generateFollowUpQuestion(
-                "create_product",
-                "productName",
-                {}
-              ),
-          });
-        }
-
-        saveSession(
-          sessionId,
-          {
-            workflow:
-              "create_product",
-
-            data: {
-              productName,
-            },
-          }
-        );
-
-        const question =
-          await generateFollowUpQuestion(
-            "create_product",
-            "productPrice",
-            {
-              productName,
-            }
-          );
-
-        return res.json({
-          reply: question,
-        });
-      }
-
-      case "update_customer": {
-
-      const {
-        customerName,
-        customerNewName,
-        email,
-        phone,
-        location,
-        dob,
-      } = aiResult;
-
-      if (!customerName) {
-        return res.json({
-          reply:
-            await generateFollowUpQuestion(
-              "update_customer",
-              "customerName",
-              {}
-            ),
-        });
-      }
-
-      const customer =
-        await findCustomerByName(
-          customerName
-        );
-
-      if (!customer) {
-        return res.json({
-          reply:
-            await generateResponse(
-              `Tell the user that customer "${customerName}" could not be found. Keep the reply short, natural, and helpful.`
-            ),
-        });
-      }
-
-      let fieldName = null;
-      let newValue = null;
-
-      if (customerNewName) {
-        fieldName =
-          "customerName";
-
-        newValue =
-          customerNewName;
-      }
-
-      else if (email) {
-        fieldName =
-          "email";
-
-        newValue =
-          email;
-      }
-
-      else if (phone) {
-        fieldName =
-          "phone";
-
-        newValue =
-          phone;
-      }
-
-      else if (location) {
-        fieldName =
-          "location";
-
-        newValue =
-          location;
-      }
-
-      else if (dob) {
-        fieldName =
-          "dob";
-
-        newValue =
-          dob;
-      }
-
-      if (!fieldName) {
-        return res.json({
-          reply:
-            await generateResponse(
-              `Ask the user what they would like to update for customer "${customerName}". Keep it short and conversational.`
-            ),
-        });
-      }
-
-      saveSession(
-        sessionId,
-        {
-          workflow:
-            "update_customer_confirmation",
-
-          data: {
-            customerName,
-            fieldName,
-            newValue,
-          },
-        }
-      );
-
-      return res.json({
-        reply:
-          await generateResponse(
-            `The user wants to update customer "${customerName}". Ask for confirmation to change "${fieldName}" to "${newValue}". Keep the tone natural and brief.`
-          ),
-
-        actions: [
-          {
-            id:
-              "confirm_update",
-
-            label:
-              "✅ Confirm Update",
-          },
-
-          {
-            id:
-              "cancel_update",
-
-            label:
-              "❌ Cancel",
-          },
-        ],
-      });
-    }
-    case "delete_customer": {
-
-  const {
-    customerName,
-  } = aiResult;
-
-  if (!customerName) {
-    return res.json({
-      reply:
-        await generateFollowUpQuestion(
-          "delete_customer",
-          "customerName",
-          {}
-        ),
-    });
-  }
-
-  const customer =
-    await findCustomerByName(
-      customerName
-    );
-
-  if (!customer) {
-    return res.json({
-      reply:
-        await generateResponse(
-          `Tell the user that customer "${customerName}" was not found. Keep it short and helpful.`
-        ),
-    });
-  }
-
-  saveSession(
-    sessionId,
-    {
-      workflow:
-        "delete_customer_confirmation",
-
-      data: {
-        customerName,
-      },
-    }
-  );
-
-  return res.json({
-    reply:
-      await generateResponse(
-        `The user wants to delete customer "${customerName}". Ask for a quick confirmation in a natural, human way.`
+async function startUpdate(key, kind, aiResult) {
+  const reference = kind === "customer" ? aiResult.customerName : aiResult.productName;
+
+  if (isBlank(reference)) {
+    return {
+      reply: await ai.generateFollowUpQuestion(
+        `update_${kind}`,
+        kind === "customer" ? "customerName" : "productName",
+        {}
       ),
-
-    actions: [
-      {
-        id:
-          "confirm_delete",
-
-        label:
-          "🗑 Confirm Delete",
-      },
-
-      {
-        id:
-          "cancel_delete",
-
-        label:
-          "❌ Cancel",
-      },
-    ],
-  });
-}
-case "delete_product": {
-
-  const {
-    productName,
-  } = aiResult;
-
-  if (!productName) {
-    return res.json({
-      reply:
-        await generateFollowUpQuestion(
-          "delete_product",
-          "productName",
-          {}
-        ),
-    });
+    };
   }
 
-  const product =
-    await findProductByName(
-      productName
-    );
-
-  if (!product) {
-    return res.json({
-      reply:
-        await generateResponse(
-          `Tell the user that product "${productName}" was not found. Keep it short and natural.`
-        ),
-    });
+  const { record, name, error } = await resolveRecord(kind, reference);
+  if (error) {
+    return { reply: error };
   }
 
-  saveSession(
-    sessionId,
-    {
-      workflow:
-        "delete_product_confirmation",
-
-      data: {
-        productName,
-      },
+  const changes = {};
+  for (const [source, target] of Object.entries(UPDATE_FIELDS[kind])) {
+    if (isBlank(aiResult[source])) {
+      continue;
     }
-  );
+    const { data, error: fieldError } = validateField(target, aiResult[source]);
+    if (fieldError) {
+      return { reply: fieldError };
+    }
+    changes[target] = data;
+  }
 
-  return res.json({
-    reply:
-      await generateResponse(
-        `The user wants to delete product "${productName}". Ask for confirmation in a natural way.`
+  if (Object.keys(changes).length === 0) {
+    const options = Object.values(UPDATE_FIELDS[kind]).map((field) => FIELD_LABELS[field]);
+    return {
+      reply: `What would you like to change for ${kind} "${name}"? I can update the ${options.join(", ")}.`,
+    };
+  }
+
+  saveSession(key, { workflow: "confirm_update", kind, id: record.id, name, changes });
+
+  return {
+    reply: `Please confirm: change ${kind} "${name}" (ID ${record.id}) — ${describeChanges(changes)}.`,
+    actions: UPDATE_ACTIONS,
+  };
+}
+
+async function startDelete(key, kind, aiResult) {
+  const reference = kind === "customer" ? aiResult.customerName : aiResult.productName;
+
+  if (isBlank(reference)) {
+    return {
+      reply: await ai.generateFollowUpQuestion(
+        `delete_${kind}`,
+        kind === "customer" ? "customerName" : "productName",
+        {}
       ),
+    };
+  }
 
-    actions: [
-      {
-        id:
-          "confirm_delete",
+  const { record, name, error } = await resolveRecord(kind, reference);
+  if (error) {
+    return { reply: error };
+  }
 
-        label:
-          "🗑 Confirm Delete",
-      },
+  saveSession(key, { workflow: "confirm_delete", kind, id: record.id, name });
 
-      {
-        id:
-          "cancel_delete",
+  const cascadeNote =
+    kind === "customer" ? " This also deletes all products linked to this customer." : "";
 
-        label:
-          "❌ Cancel",
-      },
-    ],
-  });
+  return {
+    reply: `Are you sure you want to delete ${kind} "${name}" (ID ${record.id})?${cascadeNote}`,
+    actions: DELETE_ACTIONS,
+  };
 }
-      case "update_product": {
 
-  const {
-    productName,
-    productPrice,
-    productQuantity,
-  } = aiResult;
+async function handleAction(key, actionId) {
+  const session = getSession(key);
+  const expectedWorkflow = actionId.endsWith("_update") ? "confirm_update" : "confirm_delete";
 
-  if (!productName) {
-    return res.json({
+  if (!session || session.workflow !== expectedWorkflow) {
+    return { reply: "That request has expired or was already handled. Please ask again." };
+  }
+
+  clearSession(key);
+
+  if (actionId.startsWith("cancel_")) {
+    return {
       reply:
-        await generateFollowUpQuestion(
-          "update_product",
-          "productName",
-          {}
-        ),
-    });
+        expectedWorkflow === "confirm_delete"
+          ? "Okay, nothing was deleted."
+          : "Okay, I left it unchanged.",
+    };
   }
 
-  const product =
-    await findProductByName(
-      productName
-    );
+  const { kind, id, name } = session;
+  let succeeded;
 
-  if (!product) {
-    return res.json({
-      reply:
-        await generateResponse(
-          `Tell the user that product "${productName}" was not found. Keep the reply short and helpful.`
-        ),
-    });
+  if (expectedWorkflow === "confirm_update") {
+    succeeded =
+      kind === "customer"
+        ? await customerService.updateCustomer(id, session.changes)
+        : await productService.updateProduct(id, session.changes);
+  } else {
+    succeeded =
+      kind === "customer"
+        ? await customerService.deleteCustomer(id)
+        : await productService.deleteProduct(id);
   }
 
-  let fieldName =
-    null;
-
-  let newValue =
-    null;
-
-  if (
-    productPrice !==
-    undefined
-  ) {
-    fieldName =
-      "productPrice";
-
-    newValue =
-      productPrice;
+  if (!succeeded) {
+    return { reply: `${kind === "customer" ? "Customer" : "Product"} "${name}" no longer exists.` };
   }
 
-  else if (
-    productQuantity !==
-    undefined
-  ) {
-    fieldName =
-      "productQuantity";
-
-    newValue =
-      productQuantity;
-  }
-
-  if (!fieldName) {
-    return res.json({
-      reply:
-        await generateResponse(
-          `Ask the user what they want to update for product "${productName}". Keep it short and conversational.`
-        ),
-    });
-  }
-
-  saveSession(
-    sessionId,
-    {
-      workflow:
-        "update_product_confirmation",
-
-      data: {
-        productName,
-        fieldName,
-        newValue,
-      },
-    }
-  );
-
-  return res.json({
+  return {
     reply:
-      await generateResponse(
-        `The user wants to update product "${productName}". Ask for confirmation to change "${fieldName}" to "${newValue}". Keep it brief and natural.`
-      ),
-
-    actions: [
-      {
-        id:
-          "confirm_update",
-
-        label:
-          "✅ Confirm Update",
-      },
-
-      {
-        id:
-          "cancel_update",
-
-        label:
-          "❌ Cancel",
-      },
-    ],
-  });
+      expectedWorkflow === "confirm_update"
+        ? `Done. ${kind === "customer" ? "Customer" : "Product"} "${name}" was updated: ${describeChanges(session.changes)}.`
+        : `Done. ${kind === "customer" ? "Customer" : "Product"} "${name}" was deleted.`,
+  };
 }
 
-      case "show_customers": {
-        const customers =
-          await getCustomers();
+/*
+|--------------------------------------------------------------------------
+| Read-only intents
+|--------------------------------------------------------------------------
+*/
 
-        return res.json({
-          reply:
-            await generateResponse(
-              `
-Show these customers to the user:
+async function describeList(kind) {
+  const rows =
+    kind === "customers" ? await customerService.listCustomers() : await productService.listProducts();
 
-${JSON.stringify(
-  customers,
-  null,
-  2
-)}
-`
-            ),
-        });
-      }
+  if (rows.length === 0) {
+    return { reply: `You don't have any ${kind} yet.` };
+  }
 
-      case "show_products": {
-        const products =
-          await getProducts();
+  const shown = rows.slice(0, MAX_LIST_ROWS);
+  const truncatedNote =
+    rows.length > shown.length
+      ? `\nThere are ${rows.length} ${kind} in total; only the newest ${shown.length} are listed. Mention that the full list is on the ${kind} page.`
+      : "";
 
-        return res.json({
-          reply:
-            await generateResponse(
-              `
-Show these products to the user:
-
-${JSON.stringify(
-  products,
-  null,
-  2
-)}
-`
-            ),
-        });
-      }
-
-      case "dashboard_stats": {
-        const stats =
-          await getDashboardStats();
-
-        return res.json({
-          reply:
-            await generateResponse(
-              `
-Explain these dashboard stats:
-
-${JSON.stringify(
-  stats,
-  null,
-  2
-)}
-`
-            ),
-        });
-      }
-
-      default: {
-  const reply =
-    await generateConversationalResponse(
-      messages
-    );
-
-  return res.json({
-    reply,
-  });
+  return {
+    reply: await ai.generateResponse(
+      `Show these ${kind} to the user:\n\n${JSON.stringify(shown, null, 2)}${truncatedNote}`
+    ),
+  };
 }
+
+async function describeStats() {
+  const stats = await getDashboardStats();
+  return {
+    reply: await ai.generateResponse(
+      `Explain these dashboard stats (values are in Indian Rupees):\n\n${JSON.stringify(stats, null, 2)}`
+    ),
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| Entry point
+|--------------------------------------------------------------------------
+*/
+
+async function handleMessage(key, message, history) {
+  if (message.startsWith(ACTION_PREFIX)) {
+    return handleAction(key, message.slice(ACTION_PREFIX.length));
+  }
+
+  const session = getSession(key);
+
+  if (isCancel(message)) {
+    clearSession(key);
+    return { reply: session ? "Okay, I've cancelled that." : "There's nothing in progress to cancel." };
+  }
+
+  if (session && CREATE_FLOWS[session.workflow] && !isSmallTalk(message)) {
+    return continueCreateFlow(key, session, message);
+  }
+
+  // Anything else abandons a half-finished flow or an unanswered confirmation.
+  if (session) {
+    clearSession(key);
+  }
+
+  const aiResult = (await ai.analyzeUserMessage(history)) || { intent: "general_question" };
+
+  switch (aiResult.intent) {
+    case "create_customer":
+    case "create_product":
+      return startCreateFlow(key, aiResult.intent, aiResult);
+    case "update_customer":
+      return startUpdate(key, "customer", aiResult);
+    case "update_product":
+      return startUpdate(key, "product", aiResult);
+    case "delete_customer":
+      return startDelete(key, "customer", aiResult);
+    case "delete_product":
+      return startDelete(key, "product", aiResult);
+    case "show_customers":
+      return describeList("customers");
+    case "show_products":
+      return describeList("products");
+    case "dashboard_stats":
+      return describeStats();
+    default:
+      return { reply: await ai.generateConversationalResponse(history) };
+  }
+}
+
+async function chatWithAssistant(req, res) {
+  const { data: body, error } = validate(requestSchema, req.body);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const history = body.messages.slice(-MAX_HISTORY);
+  const latest = history[history.length - 1];
+
+  if (latest.role !== "user" || !latest.content.trim()) {
+    return res.status(400).json({ error: "The last message must be a non-empty user message." });
+  }
+
+  // Sessions are scoped to the signed-in user, so two users on one browser never share a flow.
+  const sessionKey = `${req.user.id}:${body.sessionId}`;
+
+  try {
+    const result = await handleMessage(sessionKey, latest.content.trim(), history);
+
+    if (body.voiceOutput && result.reply) {
+      try {
+        const audio = await ai.generateVoiceAudio(result.reply);
+        result.audioBase64 = audio.toString("base64");
+      } catch (ttsError) {
+        // The browser falls back to its own speech synthesis.
+        console.error("Groq TTS failed:", ttsError.status || "", ttsError.message);
+      }
     }
-  } catch (error) {
-    console.error(error);
 
-    return res.status(500).json({
-      error:
-        "Failed to process assistant request",
-    });
+    return res.json(result);
+  } catch (err) {
+    console.error("Assistant error:", err);
+
+    if (err?.status === 401) {
+      return res.status(502).json({
+        error: "The AI service rejected the API key. Check GROQ_API_KEY on the server.",
+      });
+    }
+
+    if (err?.status === 429) {
+      return res.status(503).json({ error: "The AI service is busy. Please try again in a moment." });
+    }
+
+    return res.status(500).json({ error: "Failed to process assistant request" });
   }
 }
 

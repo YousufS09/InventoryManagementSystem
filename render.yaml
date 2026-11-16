@@ -10,8 +10,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Set to your exact Netlify URL in the Render dashboard.
       - key: FRONTEND_URL
-        value: https://your-netlify-site.netlify.app
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_EXPIRES_IN
@@ -28,3 +29,6 @@ services:
         value: defaultdb
       - key: DB_SSL
         value: true
+      # Set in the Render dashboard; never commit the key.
+      - key: GROQ_API_KEY
+        sync: false

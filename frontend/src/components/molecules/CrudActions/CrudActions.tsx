@@ -13,13 +13,18 @@ type Props = {
   endpoint: string;
   refreshData: () => void;
   onEdit: () => void;
+  deleteMessage?: string;
 };
+
+const DEFAULT_DELETE_MESSAGE =
+  "Are you sure you want to delete this record? This action cannot be undone.";
 
 const CrudActions = ({
   id,
   endpoint,
   refreshData,
   onEdit,
+  deleteMessage = DEFAULT_DELETE_MESSAGE,
 }: Props) => {
   const [
     showDeleteModal,
@@ -74,7 +79,7 @@ const CrudActions = ({
           showDeleteModal
         }
         title="Delete Record"
-        message="Are you sure you want to delete this record? This action cannot be undone."
+        message={deleteMessage}
         onConfirm={
           handleDelete
         }

@@ -1,14 +1,15 @@
-# Node Modules
-backend/node_modules/
-frontend/node_modules/
+# Patterns here are relative to the backend/ folder.
 
-# Environment Files
-backend/.env
-frontend/.env
+# Dependencies
+node_modules/
 
-# Build folders
-frontend/dist/
-backend/dist/
+# Environment files (secrets). Commit .env.example instead.
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
 
 # Logs
 *.log
@@ -17,8 +18,5 @@ backend/dist/
 .DS_Store
 Thumbs.db
 
-# VS Code
+# Editor
 .vscode/
-
-# npm
-package-lock.json

@@ -1,35 +1,35 @@
 const jwt = require("jsonwebtoken");
+const { jwtSecret } = require("../config");
+
+function readTokenFromCookie(cookieHeader) {
+  if (!cookieHeader) {
+    return null;
+  }
+
+  for (const part of cookieHeader.split(";")) {
+    const [key, ...valueParts] = part.trim().split("=");
+    if (key === "token") {
+      return decodeURIComponent(valueParts.join("="));
+    }
+  }
+
+  return null;
+}
 
 function requireAuth(req, res, next) {
-  let token = null;
-
-  // 1. Check Authorization header
   const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith("Bearer ")) {
-    token = authHeader.slice(7);
-  }
-
-  // 2. Check Cookie header fallback
-  if (!token && req.headers.cookie) {
-    const cookies = req.headers.cookie.split(";").reduce((acc, c) => {
-      const [key, ...valParts] = c.trim().split("=");
-      acc[key] = valParts.join("=");
-      return acc;
-    }, {});
-    token = cookies.token;
-  }
-
-  const secret = process.env.JWT_SECRET || "secret-key";
+  const token = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : readTokenFromCookie(req.headers.cookie);
 
   if (!token) {
     return res.status(401).json({ error: "Authorization token required." });
   }
 
   try {
-    const payload = jwt.verify(token, secret);
-    req.user = payload;
-    next();
-  } catch (error) {
+    req.user = jwt.verify(token, jwtSecret);
+    return next();
+  } catch {
     return res.status(401).json({ error: "Invalid or expired token." });
   }
 }

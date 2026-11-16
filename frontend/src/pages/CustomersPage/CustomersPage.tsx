@@ -1,53 +1,100 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import styles from "./CustomersPage.module.css";
-import CustomerModal from "../../components/organisms/CustomerModal/CustomerModal";
+import CustomerModal, { type Customer } from "../../components/organisms/CustomerModal/CustomerModal";
 import CrudActions from "../../components/molecules/CrudActions/CrudActions";
 import MainLayout from "../../layouts/MainLayout";
-import { apiFetch } from "../../services/api";
-
-type Customer = {
-  id: number;
-  customer_name: string;
-  dob: string;
-  email: string;
-  phone: string;
-  location: string;
-};
+import { apiRequest, getErrorMessage } from "../../services/api";
 
 const CustomersPage = () => {
   const [showModal, setShowModal] = useState(false);
   const navigate = useNavigate();
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
 
-  const fetchCustomers = async () => {
-    try {
-      const response = await apiFetch("/api/customers");
-      const data = await response.json();
-
-      if (!response.ok) {
-        console.error("Failed to fetch customers:", data);
-        setCustomers([]);
-        return;
-      }
-
-      setCustomers(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error(error);
-      setCustomers([]);
-    }
-  };
+  // Bumping this number re-runs the fetch effect (after a create, update or delete).
+  const [reloadKey, setReloadKey] = useState(0);
+  const fetchCustomers = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
-    fetchCustomers();
-  }, []);
+    let cancelled = false;
+
+    apiRequest<Customer[]>("/api/customers")
+      .then((data) => {
+        if (cancelled) return;
+        setCustomers(data);
+        setLoadError(null);
+      })
+      .catch((error) => {
+        if (!cancelled) setLoadError(getErrorMessage(error, "Failed to load customers."));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  const renderBody = () => {
+    if (loading) {
+      return <p className={styles.emptyMessage}>Loading customers...</p>;
+    }
+    if (loadError) {
+      return <p className={styles.emptyMessage}>{loadError}</p>;
+    }
+    if (customers.length === 0) {
+      return <p className={styles.emptyMessage}>No customers found yet.</p>;
+    }
+
+    return (
+      <table className={styles.customersTable}>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>DOB</th>
+            <th>Email</th>
+            <th>Phone</th>
+            <th>Location</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {customers.map((customer) => (
+            <tr key={customer.id}>
+              <td>{customer.id}</td>
+              <td>{customer.customer_name}</td>
+              <td>{customer.dob}</td>
+              <td>{customer.email}</td>
+              <td>{customer.phone}</td>
+              <td>{customer.location}</td>
+              <td>
+                <CrudActions
+                  id={customer.id}
+                  endpoint="customers"
+                  refreshData={fetchCustomers}
+                  deleteMessage={`Delete "${customer.customer_name}"? All products linked to this customer will also be deleted. This cannot be undone.`}
+                  onEdit={() => {
+                    setSelectedCustomer(customer);
+                    setShowModal(true);
+                  }}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
 
   return (
     <MainLayout>
       <div className={styles.container}>
-        {/* Header */}
-
         <div className={styles.header}>
           <div>
             <h1 className={styles.title}>Customers</h1>
@@ -82,61 +129,15 @@ const CustomersPage = () => {
           </button>
         </div>
 
-        {/* Table */}
-
-        <div className={styles.tableContainer}>
-          {customers.length === 0 ? (
-            <p className={styles.emptyMessage}>No customers found yet.</p>
-          ) : (
-            <table className={styles.customersTable}>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Name</th>
-                  <th>DOB</th>
-                  <th>Email</th>
-                  <th>Phone</th>
-                  <th>Location</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {customers.map((customer) => (
-                  <tr key={customer.id}>
-                    <td>{customer.id}</td>
-                    <td>{customer.customer_name}</td>
-                    <td>{customer.dob}</td>
-                    <td>{customer.email}</td>
-                    <td>{customer.phone}</td>
-                    <td>{customer.location}</td>
-                    <td>
-                      <CrudActions
-                        id={customer.id}
-                        endpoint="customers"
-                        refreshData={fetchCustomers}
-                        onEdit={() => {
-                          setSelectedCustomer(customer);
-                          setShowModal(true);
-                        }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* Add / Edit Modal */}
+        <div className={styles.tableContainer}>{renderBody()}</div>
 
         {showModal && (
           <CustomerModal
             customer={selectedCustomer}
+            onSaved={fetchCustomers}
             onClose={() => {
               setShowModal(false);
               setSelectedCustomer(null);
-              fetchCustomers();
             }}
           />
         )}
