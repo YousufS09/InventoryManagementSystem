@@ -120,7 +120,7 @@ function describeChanges(changes) {
 | acting on the first match.
 */
 
-async function resolveRecord(kind, reference) {
+async function resolveRecord(userId, kind, reference) {
   const text = String(reference ?? "").trim();
   const service = kind === "customer" ? customerService : productService;
   const nameKey = kind === "customer" ? "customer_name" : "product_name";
@@ -129,8 +129,8 @@ async function resolveRecord(kind, reference) {
   if (idMatch) {
     const record =
       kind === "customer"
-        ? await service.getCustomerById(Number(idMatch[1]))
-        : await service.getProductById(Number(idMatch[1]));
+        ? await service.getCustomerById(userId, Number(idMatch[1]))
+        : await service.getProductById(userId, Number(idMatch[1]));
     return record
       ? { record, name: record[nameKey] }
       : { error: `I couldn't find a ${kind} with ID ${idMatch[1]}.` };
@@ -138,8 +138,8 @@ async function resolveRecord(kind, reference) {
 
   const matches =
     kind === "customer"
-      ? await service.findCustomersByName(text)
-      : await service.findProductsByName(text);
+      ? await service.findCustomersByName(userId, text)
+      : await service.findProductsByName(userId, text);
 
   if (matches.length === 0) {
     return { error: `I couldn't find a ${kind} named "${text}".` };
@@ -161,9 +161,9 @@ async function resolveRecord(kind, reference) {
 |--------------------------------------------------------------------------
 */
 
-async function acceptField(workflow, field, raw) {
+async function acceptField(ctx, workflow, field, raw) {
   if (workflow === "create_product" && field === "customerName") {
-    const { record, name, error } = await resolveRecord("customer", raw);
+    const { record, name, error } = await resolveRecord(ctx.userId, "customer", raw);
     if (error) {
       return { error };
     }
@@ -178,32 +178,36 @@ function nextMissingField(workflow, data) {
   return CREATE_FLOWS[workflow].find((field) => data[field] === undefined);
 }
 
-async function advanceCreateFlow(key, session) {
+async function advanceCreateFlow(ctx, session) {
   const field = nextMissingField(session.workflow, session.data);
 
   if (field) {
-    saveSession(key, session);
+    saveSession(ctx.key, session);
     return {
       reply: await ai.generateFollowUpQuestion(session.workflow, field, session.data),
     };
   }
 
-  clearSession(key);
+  clearSession(ctx.key);
 
   if (session.workflow === "create_customer") {
-    const customerId = await customerService.createCustomer(session.data);
+    const customerId = await customerService.createCustomer(ctx.userId, session.data);
     return {
       reply: await ai.generateSuccessMessage("create_customer", { ...session.data, customerId }),
     };
   }
 
-  const productId = await productService.createProduct(session.data);
+  const productId = await productService.createProduct(ctx.userId, session.data);
+  if (productId === null) {
+    // The customer was deleted while the flow was in progress.
+    return { reply: `Customer "${session.data.customerName}" no longer exists, so the product was not created.` };
+  }
   return {
     reply: await ai.generateSuccessMessage("create_product", { ...session.data, productId }),
   };
 }
 
-async function startCreateFlow(key, workflow, aiResult) {
+async function startCreateFlow(ctx, workflow, aiResult) {
   const data = {};
   const problems = [];
 
@@ -212,7 +216,7 @@ async function startCreateFlow(key, workflow, aiResult) {
     if (isBlank(aiResult[field])) {
       continue;
     }
-    const { values, error } = await acceptField(workflow, field, aiResult[field]);
+    const { values, error } = await acceptField(ctx, workflow, field, aiResult[field]);
     if (error) {
       problems.push(error);
     } else {
@@ -220,24 +224,24 @@ async function startCreateFlow(key, workflow, aiResult) {
     }
   }
 
-  const result = await advanceCreateFlow(key, { workflow, data });
+  const result = await advanceCreateFlow(ctx, { workflow, data });
   if (problems.length > 0) {
     result.reply = `${problems.join(" ")} ${result.reply}`;
   }
   return result;
 }
 
-async function continueCreateFlow(key, session, message) {
+async function continueCreateFlow(ctx, session, message) {
   const field = nextMissingField(session.workflow, session.data);
-  const { values, error } = await acceptField(session.workflow, field, message);
+  const { values, error } = await acceptField(ctx, session.workflow, field, message);
 
   if (error) {
-    saveSession(key, session);
+    saveSession(ctx.key, session);
     return { reply: `${error} Please try again, or say "cancel" to stop.` };
   }
 
   Object.assign(session.data, values);
-  return advanceCreateFlow(key, session);
+  return advanceCreateFlow(ctx, session);
 }
 
 /*
@@ -246,7 +250,7 @@ async function continueCreateFlow(key, session, message) {
 |--------------------------------------------------------------------------
 */
 
-async function startUpdate(key, kind, aiResult) {
+async function startUpdate(ctx, kind, aiResult) {
   const reference = kind === "customer" ? aiResult.customerName : aiResult.productName;
 
   if (isBlank(reference)) {
@@ -259,7 +263,7 @@ async function startUpdate(key, kind, aiResult) {
     };
   }
 
-  const { record, name, error } = await resolveRecord(kind, reference);
+  const { record, name, error } = await resolveRecord(ctx.userId, kind, reference);
   if (error) {
     return { reply: error };
   }
@@ -283,7 +287,7 @@ async function startUpdate(key, kind, aiResult) {
     };
   }
 
-  saveSession(key, { workflow: "confirm_update", kind, id: record.id, name, changes });
+  saveSession(ctx.key, { workflow: "confirm_update", kind, id: record.id, name, changes });
 
   return {
     reply: `Please confirm: change ${kind} "${name}" (ID ${record.id}) — ${describeChanges(changes)}.`,
@@ -291,7 +295,7 @@ async function startUpdate(key, kind, aiResult) {
   };
 }
 
-async function startDelete(key, kind, aiResult) {
+async function startDelete(ctx, kind, aiResult) {
   const reference = kind === "customer" ? aiResult.customerName : aiResult.productName;
 
   if (isBlank(reference)) {
@@ -304,12 +308,12 @@ async function startDelete(key, kind, aiResult) {
     };
   }
 
-  const { record, name, error } = await resolveRecord(kind, reference);
+  const { record, name, error } = await resolveRecord(ctx.userId, kind, reference);
   if (error) {
     return { reply: error };
   }
 
-  saveSession(key, { workflow: "confirm_delete", kind, id: record.id, name });
+  saveSession(ctx.key, { workflow: "confirm_delete", kind, id: record.id, name });
 
   const cascadeNote =
     kind === "customer" ? " This also deletes all products linked to this customer." : "";
@@ -320,15 +324,15 @@ async function startDelete(key, kind, aiResult) {
   };
 }
 
-async function handleAction(key, actionId) {
-  const session = getSession(key);
+async function handleAction(ctx, actionId) {
+  const session = getSession(ctx.key);
   const expectedWorkflow = actionId.endsWith("_update") ? "confirm_update" : "confirm_delete";
 
   if (!session || session.workflow !== expectedWorkflow) {
     return { reply: "That request has expired or was already handled. Please ask again." };
   }
 
-  clearSession(key);
+  clearSession(ctx.key);
 
   if (actionId.startsWith("cancel_")) {
     return {
@@ -345,13 +349,13 @@ async function handleAction(key, actionId) {
   if (expectedWorkflow === "confirm_update") {
     succeeded =
       kind === "customer"
-        ? await customerService.updateCustomer(id, session.changes)
-        : await productService.updateProduct(id, session.changes);
+        ? await customerService.updateCustomer(ctx.userId, id, session.changes)
+        : await productService.updateProduct(ctx.userId, id, session.changes);
   } else {
     succeeded =
       kind === "customer"
-        ? await customerService.deleteCustomer(id)
-        : await productService.deleteProduct(id);
+        ? await customerService.deleteCustomer(ctx.userId, id)
+        : await productService.deleteProduct(ctx.userId, id);
   }
 
   if (!succeeded) {
@@ -372,9 +376,9 @@ async function handleAction(key, actionId) {
 |--------------------------------------------------------------------------
 */
 
-async function describeList(kind) {
+async function describeList(ctx, kind) {
   const rows =
-    kind === "customers" ? await customerService.listCustomers() : await productService.listProducts();
+    kind === "customers" ? await customerService.listCustomers(ctx.userId) : await productService.listProducts(ctx.userId);
 
   if (rows.length === 0) {
     return { reply: `You don't have any ${kind} yet.` };
@@ -393,8 +397,8 @@ async function describeList(kind) {
   };
 }
 
-async function describeStats() {
-  const stats = await getDashboardStats();
+async function describeStats(ctx) {
+  const stats = await getDashboardStats(ctx.userId);
   return {
     reply: await ai.generateResponse(
       `Explain these dashboard stats (values are in Indian Rupees):\n\n${JSON.stringify(stats, null, 2)}`
@@ -408,25 +412,25 @@ async function describeStats() {
 |--------------------------------------------------------------------------
 */
 
-async function handleMessage(key, message, history) {
+async function handleMessage(ctx, message, history) {
   if (message.startsWith(ACTION_PREFIX)) {
-    return handleAction(key, message.slice(ACTION_PREFIX.length));
+    return handleAction(ctx, message.slice(ACTION_PREFIX.length));
   }
 
-  const session = getSession(key);
+  const session = getSession(ctx.key);
 
   if (isCancel(message)) {
-    clearSession(key);
+    clearSession(ctx.key);
     return { reply: session ? "Okay, I've cancelled that." : "There's nothing in progress to cancel." };
   }
 
   if (session && CREATE_FLOWS[session.workflow] && !isSmallTalk(message)) {
-    return continueCreateFlow(key, session, message);
+    return continueCreateFlow(ctx, session, message);
   }
 
   // Anything else abandons a half-finished flow or an unanswered confirmation.
   if (session) {
-    clearSession(key);
+    clearSession(ctx.key);
   }
 
   const aiResult = (await ai.analyzeUserMessage(history)) || { intent: "general_question" };
@@ -434,21 +438,21 @@ async function handleMessage(key, message, history) {
   switch (aiResult.intent) {
     case "create_customer":
     case "create_product":
-      return startCreateFlow(key, aiResult.intent, aiResult);
+      return startCreateFlow(ctx, aiResult.intent, aiResult);
     case "update_customer":
-      return startUpdate(key, "customer", aiResult);
+      return startUpdate(ctx, "customer", aiResult);
     case "update_product":
-      return startUpdate(key, "product", aiResult);
+      return startUpdate(ctx, "product", aiResult);
     case "delete_customer":
-      return startDelete(key, "customer", aiResult);
+      return startDelete(ctx, "customer", aiResult);
     case "delete_product":
-      return startDelete(key, "product", aiResult);
+      return startDelete(ctx, "product", aiResult);
     case "show_customers":
-      return describeList("customers");
+      return describeList(ctx, "customers");
     case "show_products":
-      return describeList("products");
+      return describeList(ctx, "products");
     case "dashboard_stats":
-      return describeStats();
+      return describeStats(ctx);
     default:
       return { reply: await ai.generateConversationalResponse(history) };
   }
@@ -471,7 +475,7 @@ async function chatWithAssistant(req, res) {
   const sessionKey = `${req.user.id}:${body.sessionId}`;
 
   try {
-    const result = await handleMessage(sessionKey, latest.content.trim(), history);
+    const result = await handleMessage({ key: sessionKey, userId: req.user.id }, latest.content.trim(), history);
 
     if (body.voiceOutput && result.reply) {
       try {

@@ -17,7 +17,7 @@ function parseId(req, res) {
 
 async function getCustomers(req, res) {
   try {
-    res.status(200).json(await customerService.listCustomers());
+    res.status(200).json(await customerService.listCustomers(req.user.id));
   } catch (error) {
     console.error("List customers error:", error);
     res.status(500).json({ error: "Failed to fetch customers" });
@@ -26,7 +26,7 @@ async function getCustomers(req, res) {
 
 async function getCustomerNames(req, res) {
   try {
-    res.status(200).json(await customerService.listCustomerNames());
+    res.status(200).json(await customerService.listCustomerNames(req.user.id));
   } catch (error) {
     console.error("List customer names error:", error);
     res.status(500).json({ error: "Failed to fetch customers" });
@@ -40,7 +40,7 @@ async function createCustomer(req, res) {
   }
 
   try {
-    const id = await customerService.createCustomer(data);
+    const id = await customerService.createCustomer(req.user.id, data);
     return res.status(201).json({ id, message: "Customer created successfully" });
   } catch (err) {
     console.error("Create customer error:", err);
@@ -58,7 +58,7 @@ async function updateCustomer(req, res) {
   }
 
   try {
-    const updated = await customerService.updateCustomer(id, data);
+    const updated = await customerService.updateCustomer(req.user.id, id, data);
     if (!updated) {
       return res.status(404).json({ error: "Customer not found" });
     }
@@ -74,7 +74,7 @@ async function deleteCustomer(req, res) {
   if (id === null) return;
 
   try {
-    const deleted = await customerService.deleteCustomer(id);
+    const deleted = await customerService.deleteCustomer(req.user.id, id);
     if (!deleted) {
       return res.status(404).json({ error: "Customer not found" });
     }

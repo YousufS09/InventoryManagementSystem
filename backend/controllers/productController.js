@@ -1,5 +1,4 @@
 const productService = require("../services/productService");
-const customerService = require("../services/customerService");
 const {
   validate,
   productSchema,
@@ -16,13 +15,9 @@ function parseId(req, res) {
   return data;
 }
 
-async function customerExists(customerId) {
-  return Boolean(await customerService.getCustomerById(customerId));
-}
-
 async function getProducts(req, res) {
   try {
-    res.status(200).json(await productService.listProducts());
+    res.status(200).json(await productService.listProducts(req.user.id));
   } catch (error) {
     console.error("List products error:", error);
     res.status(500).json({ error: "Failed to fetch products" });
@@ -36,11 +31,11 @@ async function createProduct(req, res) {
   }
 
   try {
-    if (!(await customerExists(data.customerId))) {
+    // Returns null when the customer does not exist or belongs to another user.
+    const id = await productService.createProduct(req.user.id, data);
+    if (id === null) {
       return res.status(400).json({ error: "Selected customer could not be found." });
     }
-
-    const id = await productService.createProduct(data);
     return res.status(201).json({ id, message: "Product created successfully" });
   } catch (err) {
     console.error("Create product error:", err);
@@ -58,13 +53,13 @@ async function updateProduct(req, res) {
   }
 
   try {
-    if (data.customerId !== undefined && !(await customerExists(data.customerId))) {
-      return res.status(400).json({ error: "Selected customer could not be found." });
-    }
-
-    const updated = await productService.updateProduct(id, data);
+    const updated = await productService.updateProduct(req.user.id, id, data);
     if (!updated) {
-      return res.status(404).json({ error: "Product not found" });
+      // Either the product is not this user's, or the new customer is not.
+      const exists = await productService.getProductById(req.user.id, id);
+      return exists
+        ? res.status(400).json({ error: "Selected customer could not be found." })
+        : res.status(404).json({ error: "Product not found" });
     }
     return res.status(200).json({ message: "Product updated successfully" });
   } catch (err) {
@@ -78,7 +73,7 @@ async function deleteProduct(req, res) {
   if (id === null) return;
 
   try {
-    const deleted = await productService.deleteProduct(id);
+    const deleted = await productService.deleteProduct(req.user.id, id);
     if (!deleted) {
       return res.status(404).json({ error: "Product not found" });
     }

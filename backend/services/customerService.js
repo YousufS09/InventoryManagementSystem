@@ -1,5 +1,7 @@
 const { getPool } = require("../db");
 
+// Every function takes the signed-in user's id and only touches that user's customers.
+
 // Maps API field names to database columns. Only these columns can be written.
 const CUSTOMER_COLUMNS = {
   customerName: "customer_name",
@@ -11,48 +13,53 @@ const CUSTOMER_COLUMNS = {
 
 const SELECT_FIELDS = "id, customer_name, dob, email, phone, location";
 
-async function listCustomers() {
+async function listCustomers(userId) {
   const [rows] = await getPool().execute(
-    `SELECT ${SELECT_FIELDS} FROM customers ORDER BY id DESC`
+    `SELECT ${SELECT_FIELDS} FROM customers WHERE user_id = ? ORDER BY id DESC`,
+    [userId]
   );
   return rows;
 }
 
-async function listCustomerNames() {
+async function listCustomerNames(userId) {
   const [rows] = await getPool().execute(
-    "SELECT id, customer_name FROM customers ORDER BY customer_name"
+    "SELECT id, customer_name FROM customers WHERE user_id = ? ORDER BY customer_name",
+    [userId]
   );
   return rows;
 }
 
-async function getCustomerById(id) {
+async function getCustomerById(userId, id) {
   const [rows] = await getPool().execute(
-    `SELECT ${SELECT_FIELDS} FROM customers WHERE id = ? LIMIT 1`,
-    [id]
+    `SELECT ${SELECT_FIELDS} FROM customers WHERE id = ? AND user_id = ? LIMIT 1`,
+    [id, userId]
   );
   return rows[0] || null;
 }
 
-// Returns every customer with this name (case-insensitive), so callers can detect duplicates.
-async function findCustomersByName(name) {
+// Returns every matching customer (case-insensitive), so callers can detect duplicates.
+async function findCustomersByName(userId, name) {
   const [rows] = await getPool().execute(
-    `SELECT ${SELECT_FIELDS} FROM customers WHERE LOWER(customer_name) = LOWER(?) ORDER BY id`,
-    [name.trim()]
+    `SELECT ${SELECT_FIELDS} FROM customers
+     WHERE user_id = ? AND LOWER(customer_name) = LOWER(?)
+     ORDER BY id`,
+    [userId, name.trim()]
   );
   return rows;
 }
 
-async function createCustomer(data) {
+async function createCustomer(userId, data) {
   const [result] = await getPool().execute(
-    `INSERT INTO customers (customer_name, dob, email, phone, location)
-     VALUES (?, ?, ?, ?, ?)`,
-    [data.customerName, data.dob, data.email, data.phone, data.location]
+    `INSERT INTO customers (user_id, customer_name, dob, email, phone, location)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [userId, data.customerName, data.dob, data.email, data.phone, data.location]
   );
   return result.insertId;
 }
 
-// Updates only the fields present in `data`. Returns false when the customer does not exist.
-async function updateCustomer(id, data) {
+// Updates only the fields present in `data`.
+// Returns false when the customer does not exist or belongs to someone else.
+async function updateCustomer(userId, id, data) {
   const assignments = [];
   const values = [];
 
@@ -68,15 +75,18 @@ async function updateCustomer(id, data) {
   }
 
   const [result] = await getPool().execute(
-    `UPDATE customers SET ${assignments.join(", ")} WHERE id = ?`,
-    [...values, id]
+    `UPDATE customers SET ${assignments.join(", ")} WHERE id = ? AND user_id = ?`,
+    [...values, id, userId]
   );
   return result.affectedRows > 0;
 }
 
 // Deleting a customer also deletes their products (ON DELETE CASCADE).
-async function deleteCustomer(id) {
-  const [result] = await getPool().execute("DELETE FROM customers WHERE id = ?", [id]);
+async function deleteCustomer(userId, id) {
+  const [result] = await getPool().execute(
+    "DELETE FROM customers WHERE id = ? AND user_id = ?",
+    [id, userId]
+  );
   return result.affectedRows > 0;
 }
 

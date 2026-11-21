@@ -1,13 +1,20 @@
 const { getPool } = require("../db");
 
-async function getDashboardStats() {
-  const [[row]] = await getPool().execute(`
+// Totals for the signed-in user's own customers and products only.
+async function getDashboardStats(userId) {
+  const [[row]] = await getPool().execute(
+    `
     SELECT
-      (SELECT COUNT(*) FROM customers) AS totalCustomers,
-      (SELECT COUNT(*) FROM products) AS totalProducts,
-      (SELECT IFNULL(SUM(product_quantity), 0) FROM products) AS totalQuantity,
-      (SELECT IFNULL(SUM(product_price * product_quantity), 0) FROM products) AS totalValue
-  `);
+      (SELECT COUNT(*) FROM customers WHERE user_id = ?) AS totalCustomers,
+      COUNT(p.id) AS totalProducts,
+      IFNULL(SUM(p.product_quantity), 0) AS totalQuantity,
+      IFNULL(SUM(p.product_price * p.product_quantity), 0) AS totalValue
+    FROM products p
+    JOIN customers c ON c.id = p.customer_id
+    WHERE c.user_id = ?
+  `,
+    [userId, userId]
+  );
 
   // SUM() over DECIMAL/INT comes back as a string; convert everything to numbers.
   return {
