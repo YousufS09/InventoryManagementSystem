@@ -45,11 +45,11 @@ Use these settings:
 - Build command: `npm run build`
 - Publish directory: `frontend/dist`
 
-Set this environment variable in Netlify:
+Do **not** set `VITE_API_BASE_URL` in Netlify. If an old value is there, delete it.
 
-- `VITE_API_BASE_URL=https://your-render-backend.onrender.com`
+The included [`netlify.toml`](netlify.toml) handles SPA routing and forwards every `/api/*` request to the Render backend. The browser then talks only to the Netlify domain, so the login cookie is first-party and works in Safari and in browsers that block third-party cookies.
 
-The included [`netlify.toml`](netlify.toml) already handles SPA routing.
+If your Render URL is not `https://inventory-management-backend.onrender.com`, change the `to = ...` line in `netlify.toml` to match.
 
 ## 3. Update backend CORS after Netlify is live
 
@@ -62,11 +62,12 @@ Then trigger a redeploy on Render.
 ## 4. Important notes
 
 - The frontend sends requests with `credentials: "include"`, so the backend must keep `FRONTEND_URL` exactly matched to the Netlify URL.
-- In production, auth cookies are sent with `SameSite=None` and `Secure`, which is correct for Netlify <-> Render over HTTPS.
+- Requests reach Render through two proxies (Netlify, then Render's own), so `TRUST_PROXY_HOPS` defaults to `2`. Set it to `1` if you call Render directly without the Netlify proxy.
+- The backend also creates `assistant_sessions` and upgrades older tables automatically (see `backend/migrations.js`). Customers created before per-user data have no owner and stay hidden.
 - If your Render service sleeps on the free plan, the first request may be slow.
 - If the AI assistant is not needed, you can leave `GROQ_API_KEY` unset; the assistant then replies with an error message.
 - All `/api/customers`, `/api/products`, `/api/dashboard` and `/api/assistant` routes require a signed-in user.
-- The backend creates the `user`, `customers` and `products` tables on startup if they are missing (see `backend/schema.sql`).
+- The backend creates the `user`, `customers`, `products` and `assistant_sessions` tables on startup if they are missing (see `backend/schema.sql`).
 - `.env` files are git-ignored. Keep real secrets only in local `.env` files and in the Render/Netlify dashboards.
 
 ## 5. Local Aiven CLI test

@@ -1,4 +1,5 @@
 const { getPool } = require("../db");
+const { likePattern, buildOrderAndLimit } = require("../utils/listQuery");
 
 // Every function takes the signed-in user's id and only touches that user's customers.
 
@@ -19,6 +20,42 @@ async function listCustomers(userId) {
     [userId]
   );
   return rows;
+}
+
+const CUSTOMER_SORT_COLUMNS = {
+  id: "id",
+  customer_name: "customer_name",
+  dob: "dob",
+  email: "email",
+  phone: "phone",
+  location: "location",
+};
+
+// One page of customers, optionally filtered by a search across name, email, phone and location.
+async function searchCustomers(userId, options) {
+  const where = ["user_id = ?"];
+  const params = [userId];
+
+  if (options.search) {
+    where.push("(customer_name LIKE ? OR email LIKE ? OR phone LIKE ? OR location LIKE ?)");
+    const pattern = likePattern(options.search);
+    params.push(pattern, pattern, pattern, pattern);
+  }
+
+  const whereSql = `WHERE ${where.join(" AND ")}`;
+  const pool = getPool();
+
+  const [[{ total }]] = await pool.execute(
+    `SELECT COUNT(*) AS total FROM customers ${whereSql}`,
+    params
+  );
+  const [items] = await pool.execute(
+    `SELECT ${SELECT_FIELDS} FROM customers ${whereSql}
+     ${buildOrderAndLimit(options, CUSTOMER_SORT_COLUMNS, "id")}`,
+    params
+  );
+
+  return { items, total: Number(total), page: options.page, pageSize: options.pageSize };
 }
 
 async function listCustomerNames(userId) {
@@ -92,6 +129,7 @@ async function deleteCustomer(userId, id) {
 
 module.exports = {
   listCustomers,
+  searchCustomers,
   listCustomerNames,
   getCustomerById,
   findCustomersByName,

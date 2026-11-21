@@ -6,7 +6,7 @@ const currencyFormatter = new Intl.NumberFormat("en-IN", {
 
 const numberFormatter = new Intl.NumberFormat("en-IN");
 
-/** Formats a rupee amount with Indian digit grouping, e.g. ₹12,34,567.5 */
+/** Formats a rupee amount with Indian digit grouping, e.g. ₹12,34,567.50 */
 export function formatCurrency(value: number) {
   return currencyFormatter.format(Number(value) || 0);
 }

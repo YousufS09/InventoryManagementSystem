@@ -5,6 +5,7 @@ import styles from "./AIChat.module.css";
 import ChatBubble from "../../atoms/ChatBubble/ChatBubble";
 import ChatInput from "../../molecules/ChatInput/ChatInput";
 import { apiRequest, getErrorMessage } from "../../../services/api";
+import { useAuth } from "../../../context/AuthContext";
 
 type ActionButton = {
   id: string;
@@ -25,6 +26,30 @@ type AssistantResponse = {
 
 // The backend only reads the most recent messages; avoid sending a growing transcript.
 const MAX_HISTORY = 12;
+// Messages kept in the browser so the conversation survives a page refresh.
+const MAX_STORED_MESSAGES = 50;
+
+const WELCOME_MESSAGE: Message = {
+  sender: "ai",
+  text: "Hello! I am your Inventory Management Assistant. How can I help you today?",
+};
+
+// Stored per user, so a different account on the same browser never sees it.
+const historyKey = (userId: number | undefined) => `aiChatHistory:${userId ?? "anonymous"}`;
+
+function loadHistory(userId: number | undefined): Message[] {
+  try {
+    const raw = localStorage.getItem(historyKey(userId));
+    const parsed = raw ? (JSON.parse(raw) as Message[]) : null;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      // Confirm/cancel buttons belong to a server-side step that may have expired; don't restore them.
+      return parsed.map((message) => ({ sender: message.sender, text: message.text }));
+    }
+  } catch {
+    // Corrupt or blocked storage: start a fresh conversation.
+  }
+  return [WELCOME_MESSAGE];
+}
 
 const getSessionId = () => {
   try {
@@ -41,12 +66,23 @@ const getSessionId = () => {
 };
 
 const AIChat = () => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      sender: "ai",
-      text: "Hello! I am your Inventory Management Assistant. How can I help you today?",
-    },
-  ]);
+  const { user } = useAuth();
+  const [messages, setMessages] = useState<Message[]>(() => loadHistory(user?.id));
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        historyKey(user?.id),
+        JSON.stringify(messages.slice(-MAX_STORED_MESSAGES))
+      );
+    } catch {
+      // Storage full or blocked; the chat still works for this page view.
+    }
+  }, [messages, user?.id]);
+
+  const clearHistory = () => {
+    setMessages([WELCOME_MESSAGE]);
+  };
 
   const [loading, setLoading] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -157,6 +193,14 @@ const AIChat = () => {
 
   return (
     <div className={styles.chatContainer}>
+      {messages.length > 1 && (
+        <div className={styles.chatHeader}>
+          <button type="button" className={styles.clearButton} onClick={clearHistory} disabled={loading}>
+            Clear conversation
+          </button>
+        </div>
+      )}
+
       <div className={styles.messagesArea}>
         {messages.map((message, index) => (
           <ChatBubble

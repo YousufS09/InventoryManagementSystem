@@ -1,4 +1,5 @@
 const { getPool } = require("../db");
+const { likePattern, buildOrderAndLimit } = require("../utils/listQuery");
 
 // Products have no owner column; they belong to the owner of their customer.
 // Every query joins customers and filters on customers.user_id.
@@ -32,6 +33,47 @@ function toProduct(row) {
 async function listProducts(userId) {
   const [rows] = await getPool().execute(`${SELECT_WITH_CUSTOMER} ORDER BY p.id DESC`, [userId]);
   return rows.map(toProduct);
+}
+
+const PRODUCT_SORT_COLUMNS = {
+  id: "p.id",
+  product_name: "p.product_name",
+  product_price: "p.product_price",
+  product_quantity: "p.product_quantity",
+  customer_id: "p.customer_id",
+  customer_name: "c.customer_name",
+};
+
+// One page of products, optionally filtered by a search on product or customer name.
+async function searchProducts(userId, options) {
+  let searchSql = "";
+  const params = [userId];
+
+  if (options.search) {
+    searchSql = "AND (p.product_name LIKE ? OR c.customer_name LIKE ?)";
+    const pattern = likePattern(options.search);
+    params.push(pattern, pattern);
+  }
+
+  const pool = getPool();
+  const [[{ total }]] = await pool.execute(
+    `SELECT COUNT(*) AS total
+     FROM products p JOIN customers c ON c.id = p.customer_id
+     WHERE c.user_id = ? ${searchSql}`,
+    params
+  );
+  const [rows] = await pool.execute(
+    `${SELECT_WITH_CUSTOMER} ${searchSql}
+     ${buildOrderAndLimit(options, PRODUCT_SORT_COLUMNS, "id")}`,
+    params
+  );
+
+  return {
+    items: rows.map(toProduct),
+    total: Number(total),
+    page: options.page,
+    pageSize: options.pageSize,
+  };
 }
 
 async function getProductById(userId, id) {
@@ -109,6 +151,7 @@ async function deleteProduct(userId, id) {
 
 module.exports = {
   listProducts,
+  searchProducts,
   getProductById,
   findProductsByName,
   createProduct,

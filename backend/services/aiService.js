@@ -126,6 +126,7 @@ productName
 productNewName
 productPrice
 productQuantity
+productNewCustomer
 customerName
 
 Examples:
@@ -208,6 +209,16 @@ Response:
   "intent":"update_product",
   "productName":"Laptop",
   "productNewName":"Notebook"
+}
+
+User:
+Move product Laptop to customer Ravi
+
+Response:
+{
+  "intent":"update_product",
+  "productName":"Laptop",
+  "productNewCustomer":"Ravi"
 }
 
 User:

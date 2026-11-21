@@ -28,6 +28,19 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// Removes the AI chat transcript and session id so the next person on this browser starts clean.
+function clearAssistantStorage() {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("aiChatHistory:") || key === "aiSessionId") {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // Storage blocked; nothing to clear.
+  }
+}
+
 /**
  * Loads the signed-in user once for the whole app, instead of every page
  * fetching /api/auth/profile on its own.
@@ -58,6 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Clear local state even if the server could not be reached.
     }
+    clearAssistantStorage();
     setUserState(null);
     setStatus("anonymous");
   }, []);

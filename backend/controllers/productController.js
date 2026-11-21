@@ -4,6 +4,7 @@ const {
   productSchema,
   productUpdateSchema,
   idParamSchema,
+  listQuerySchema,
 } = require("../utils/validation");
 
 function parseId(req, res) {
@@ -15,12 +16,18 @@ function parseId(req, res) {
   return data;
 }
 
+// GET /api/products?search=&sort=&order=&page=&pageSize=  ->  { items, total, page, pageSize }
 async function getProducts(req, res) {
+  const { data: options, error: queryError } = validate(listQuerySchema, req.query);
+  if (queryError) {
+    return res.status(400).json({ error: queryError });
+  }
+
   try {
-    res.status(200).json(await productService.listProducts(req.user.id));
+    return res.status(200).json(await productService.searchProducts(req.user.id, options));
   } catch (error) {
     console.error("List products error:", error);
-    res.status(500).json({ error: "Failed to fetch products" });
+    return res.status(500).json({ error: "Failed to fetch products" });
   }
 }
 

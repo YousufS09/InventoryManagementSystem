@@ -1,73 +1,69 @@
-﻿import { useCallback, useEffect, useState } from "react";
+﻿import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import styles from "./ProductsPage.module.css";
 import CrudActions from "../../components/molecules/CrudActions/CrudActions";
+import {
+  Pagination,
+  SortableHeader,
+  TableToolbar,
+} from "../../components/molecules/TableControls/TableControls";
 import ProductModal, { type Product } from "../../components/organisms/ProductModal/ProductModal";
 import MainLayout from "../../layouts/MainLayout";
-import { apiRequest, getErrorMessage } from "../../services/api";
+import { usePagedList } from "../../hooks/usePagedList";
 import { formatCurrency } from "../../utils/format";
+
+const COLUMNS: { key: string; label: string }[] = [
+  { key: "id", label: "Product ID" },
+  { key: "product_name", label: "Product Name" },
+  { key: "product_price", label: "Price" },
+  { key: "product_quantity", label: "Quantity" },
+  { key: "customer_id", label: "Customer ID" },
+  { key: "customer_name", label: "Customer Name" },
+];
 
 const ProductsPage = () => {
   const [showModal, setShowModal] = useState(false);
   const navigate = useNavigate();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-
-  // Bumping this number re-runs the fetch effect (after a create, update or delete).
-  const [reloadKey, setReloadKey] = useState(0);
-  const fetchProducts = useCallback(() => setReloadKey((key) => key + 1), []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    apiRequest<Product[]>("/api/products")
-      .then((data) => {
-        if (cancelled) return;
-        setProducts(data);
-        setLoadError(null);
-      })
-      .catch((error) => {
-        if (!cancelled) setLoadError(getErrorMessage(error, "Failed to load products."));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
+  const list = usePagedList<Product>("/api/products");
 
   const renderBody = () => {
-    if (loading) {
+    if (list.loading) {
       return <p className={styles.emptyMessage}>Loading products...</p>;
     }
-    if (loadError) {
-      return <p className={styles.emptyMessage}>{loadError}</p>;
+    if (list.error) {
+      return <p className={styles.emptyMessage}>{list.error}</p>;
     }
-    if (products.length === 0) {
-      return <p className={styles.emptyMessage}>No products found yet.</p>;
+    if (list.items.length === 0) {
+      return (
+        <p className={styles.emptyMessage}>
+          {list.activeSearch ? `No products match "${list.activeSearch}".` : "No products found yet."}
+        </p>
+      );
     }
 
     return (
       <table className={styles.customerTable}>
         <thead>
           <tr>
-            <th>Product ID</th>
-            <th>Product Name</th>
-            <th>Price</th>
-            <th>Quantity</th>
-            <th>Customer ID</th>
-            <th>Customer Name</th>
+            {COLUMNS.map((column) => (
+              <SortableHeader
+                key={column.key}
+                column={column.key}
+                sort={list.sort}
+                order={list.order}
+                onSort={list.toggleSort}
+              >
+                {column.label}
+              </SortableHeader>
+            ))}
             <th>Actions</th>
           </tr>
         </thead>
 
         <tbody>
-          {products.map((product) => (
+          {list.items.map((product) => (
             <tr key={product.id}>
               <td>
                 <span className={styles.productId}>
@@ -84,7 +80,7 @@ const ProductsPage = () => {
                 <CrudActions
                   id={product.id}
                   endpoint="products"
-                  refreshData={fetchProducts}
+                  refreshData={list.reload}
                   onEdit={() => {
                     setSelectedProduct(product);
                     setShowModal(true);
@@ -122,7 +118,7 @@ const ProductsPage = () => {
           <div>
             <div className={styles.voiceHintTitle}>Voice control available</div>
             <p className={styles.voiceHintText}>
-              Open the AI Assistant and say things like "Create product Laptop price 50000 quantity 5 for Raj" or "Delete product Mouse" to manage inventory hands-free.
+              Open the AI Assistant and say things like "Create product Laptop price 50000 quantity 5 for Raj" or "Move product Laptop to customer Ravi" to manage inventory hands-free.
             </p>
           </div>
 
@@ -135,12 +131,29 @@ const ProductsPage = () => {
           </button>
         </div>
 
-        <div className={styles.tableContainer}>{renderBody()}</div>
+        <div className={styles.tableContainer}>
+          <TableToolbar
+            search={list.search}
+            onSearchChange={list.setSearch}
+            placeholder="Search product or customer name"
+            pageSize={list.pageSize}
+            onPageSizeChange={list.setPageSize}
+          />
+          {renderBody()}
+          {!list.loading && !list.error && (
+            <Pagination
+              page={list.page}
+              pageSize={list.pageSize}
+              total={list.total}
+              onPageChange={list.setPage}
+            />
+          )}
+        </div>
 
         {showModal && (
           <ProductModal
             product={selectedProduct}
-            onSaved={fetchProducts}
+            onSaved={list.reload}
             onClose={() => {
               setShowModal(false);
               setSelectedProduct(null);

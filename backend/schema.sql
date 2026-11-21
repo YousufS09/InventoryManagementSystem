@@ -27,6 +27,18 @@ CREATE TABLE IF NOT EXISTS customers (
   CONSTRAINT fk_customers_user FOREIGN KEY (user_id) REFERENCES `user` (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- In-progress AI assistant conversations (e.g. "create customer" asking one field
+-- at a time). Rows older than 15 minutes are ignored and periodically deleted.
+CREATE TABLE IF NOT EXISTS assistant_sessions (
+  session_key VARCHAR(150) NOT NULL,
+  user_id INT NOT NULL,
+  data JSON NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (session_key),
+  KEY idx_assistant_sessions_updated (updated_at),
+  CONSTRAINT fk_assistant_sessions_user FOREIGN KEY (user_id) REFERENCES `user` (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Products have no user_id of their own: they belong to the owner of their customer.
 CREATE TABLE IF NOT EXISTS products (
   id INT NOT NULL AUTO_INCREMENT,

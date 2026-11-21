@@ -1,71 +1,67 @@
-﻿import { useCallback, useEffect, useState } from "react";
+﻿import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import styles from "./CustomersPage.module.css";
 import CustomerModal, { type Customer } from "../../components/organisms/CustomerModal/CustomerModal";
 import CrudActions from "../../components/molecules/CrudActions/CrudActions";
+import {
+  Pagination,
+  SortableHeader,
+  TableToolbar,
+} from "../../components/molecules/TableControls/TableControls";
 import MainLayout from "../../layouts/MainLayout";
-import { apiRequest, getErrorMessage } from "../../services/api";
+import { usePagedList } from "../../hooks/usePagedList";
+
+const COLUMNS: { key: string; label: string }[] = [
+  { key: "id", label: "ID" },
+  { key: "customer_name", label: "Name" },
+  { key: "dob", label: "DOB" },
+  { key: "email", label: "Email" },
+  { key: "phone", label: "Phone" },
+  { key: "location", label: "Location" },
+];
 
 const CustomersPage = () => {
   const [showModal, setShowModal] = useState(false);
   const navigate = useNavigate();
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-
-  // Bumping this number re-runs the fetch effect (after a create, update or delete).
-  const [reloadKey, setReloadKey] = useState(0);
-  const fetchCustomers = useCallback(() => setReloadKey((key) => key + 1), []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    apiRequest<Customer[]>("/api/customers")
-      .then((data) => {
-        if (cancelled) return;
-        setCustomers(data);
-        setLoadError(null);
-      })
-      .catch((error) => {
-        if (!cancelled) setLoadError(getErrorMessage(error, "Failed to load customers."));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
+  const list = usePagedList<Customer>("/api/customers");
 
   const renderBody = () => {
-    if (loading) {
+    if (list.loading) {
       return <p className={styles.emptyMessage}>Loading customers...</p>;
     }
-    if (loadError) {
-      return <p className={styles.emptyMessage}>{loadError}</p>;
+    if (list.error) {
+      return <p className={styles.emptyMessage}>{list.error}</p>;
     }
-    if (customers.length === 0) {
-      return <p className={styles.emptyMessage}>No customers found yet.</p>;
+    if (list.items.length === 0) {
+      return (
+        <p className={styles.emptyMessage}>
+          {list.activeSearch ? `No customers match "${list.activeSearch}".` : "No customers found yet."}
+        </p>
+      );
     }
 
     return (
       <table className={styles.customersTable}>
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Name</th>
-            <th>DOB</th>
-            <th>Email</th>
-            <th>Phone</th>
-            <th>Location</th>
+            {COLUMNS.map((column) => (
+              <SortableHeader
+                key={column.key}
+                column={column.key}
+                sort={list.sort}
+                order={list.order}
+                onSort={list.toggleSort}
+              >
+                {column.label}
+              </SortableHeader>
+            ))}
             <th>Actions</th>
           </tr>
         </thead>
 
         <tbody>
-          {customers.map((customer) => (
+          {list.items.map((customer) => (
             <tr key={customer.id}>
               <td>{customer.id}</td>
               <td>{customer.customer_name}</td>
@@ -77,7 +73,7 @@ const CustomersPage = () => {
                 <CrudActions
                   id={customer.id}
                   endpoint="customers"
-                  refreshData={fetchCustomers}
+                  refreshData={list.reload}
                   deleteMessage={`Delete "${customer.customer_name}"? All products linked to this customer will also be deleted. This cannot be undone.`}
                   onEdit={() => {
                     setSelectedCustomer(customer);
@@ -129,12 +125,29 @@ const CustomersPage = () => {
           </button>
         </div>
 
-        <div className={styles.tableContainer}>{renderBody()}</div>
+        <div className={styles.tableContainer}>
+          <TableToolbar
+            search={list.search}
+            onSearchChange={list.setSearch}
+            placeholder="Search name, email, phone or location"
+            pageSize={list.pageSize}
+            onPageSizeChange={list.setPageSize}
+          />
+          {renderBody()}
+          {!list.loading && !list.error && (
+            <Pagination
+              page={list.page}
+              pageSize={list.pageSize}
+              total={list.total}
+              onPageChange={list.setPage}
+            />
+          )}
+        </div>
 
         {showModal && (
           <CustomerModal
             customer={selectedCustomer}
-            onSaved={fetchCustomers}
+            onSaved={list.reload}
             onClose={() => {
               setShowModal(false);
               setSelectedCustomer(null);

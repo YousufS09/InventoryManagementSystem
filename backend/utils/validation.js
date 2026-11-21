@@ -107,6 +107,16 @@ const signinSchema = z.object({
 
 const idParamSchema = z.coerce.number().int().positive();
 
+// Query string for paged list endpoints: ?search=&sort=&order=&page=&pageSize=
+// `sort` is checked against a per-endpoint allow-list in the service.
+const listQuerySchema = z.object({
+  search: z.string().trim().max(100).optional().default(""),
+  sort: z.string().trim().max(50).optional(),
+  order: z.enum(["asc", "desc"]).optional().default("desc"),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).optional().default(10),
+});
+
 /**
  * Parses data with a schema. Returns { data } on success or { error } with the first message.
  */
@@ -127,6 +137,7 @@ module.exports = {
   signupSchema,
   signinSchema,
   idParamSchema,
+  listQuerySchema,
   // Field-level schemas, reused by the AI assistant to check one answer at a time.
   fields: {
     customerName: trimmed("Customer name", 100),

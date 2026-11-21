@@ -30,6 +30,7 @@ function loadConfig() {
     frontendUrl: process.env.FRONTEND_URL,
     jwtSecret,
     jwtExpiresIn: process.env.JWT_EXPIRES_IN || "2h",
+    trustProxyHops: Number(process.env.TRUST_PROXY_HOPS) || 2,
   };
 }
 

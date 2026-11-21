@@ -35,6 +35,7 @@ const FIELD_LABELS = {
   productName: "name",
   productPrice: "price",
   productQuantity: "quantity",
+  customerId: "customer",
 };
 
 // Fields collected one at a time when creating a record.
@@ -101,13 +102,20 @@ function validateField(field, raw) {
   return validate(fields[field], value);
 }
 
-function formatValue(field, value) {
-  return field === "productPrice" ? `₹${Number(value).toLocaleString("en-IN")}` : `"${value}"`;
+function formatValue(field, value, names) {
+  if (field === "productPrice") {
+    return `₹${Number(value).toLocaleString("en-IN")}`;
+  }
+  if (field === "customerId") {
+    return `"${names?.customerId ?? ""}" (ID ${value})`;
+  }
+  return `"${value}"`;
 }
 
-function describeChanges(changes) {
+// `names` holds display names for ID fields, e.g. { customerId: "Ravi" }.
+function describeChanges(changes, names = {}) {
   return Object.entries(changes)
-    .map(([field, value]) => `${FIELD_LABELS[field]} to ${formatValue(field, value)}`)
+    .map(([field, value]) => `${FIELD_LABELS[field]} to ${formatValue(field, value, names)}`)
     .join(", ");
 }
 
@@ -182,13 +190,13 @@ async function advanceCreateFlow(ctx, session) {
   const field = nextMissingField(session.workflow, session.data);
 
   if (field) {
-    saveSession(ctx.key, session);
+    await saveSession(ctx, session);
     return {
       reply: await ai.generateFollowUpQuestion(session.workflow, field, session.data),
     };
   }
 
-  clearSession(ctx.key);
+  await clearSession(ctx);
 
   if (session.workflow === "create_customer") {
     const customerId = await customerService.createCustomer(ctx.userId, session.data);
@@ -236,7 +244,7 @@ async function continueCreateFlow(ctx, session, message) {
   const { values, error } = await acceptField(ctx, session.workflow, field, message);
 
   if (error) {
-    saveSession(ctx.key, session);
+    await saveSession(ctx, session);
     return { reply: `${error} Please try again, or say "cancel" to stop.` };
   }
 
@@ -280,17 +288,33 @@ async function startUpdate(ctx, kind, aiResult) {
     changes[target] = data;
   }
 
+  // "Move product Laptop to customer Ravi": the new owner must be one of this user's customers.
+  const names = {};
+  if (kind === "product" && !isBlank(aiResult.productNewCustomer)) {
+    const target = await resolveRecord(ctx.userId, "customer", aiResult.productNewCustomer);
+    if (target.error) {
+      return { reply: target.error };
+    }
+    if (target.record.id !== record.customer_id) {
+      changes.customerId = target.record.id;
+      names.customerId = target.name;
+    }
+  }
+
   if (Object.keys(changes).length === 0) {
     const options = Object.values(UPDATE_FIELDS[kind]).map((field) => FIELD_LABELS[field]);
+    if (kind === "product") {
+      options.push("customer");
+    }
     return {
       reply: `What would you like to change for ${kind} "${name}"? I can update the ${options.join(", ")}.`,
     };
   }
 
-  saveSession(ctx.key, { workflow: "confirm_update", kind, id: record.id, name, changes });
+  await saveSession(ctx, { workflow: "confirm_update", kind, id: record.id, name, changes, names });
 
   return {
-    reply: `Please confirm: change ${kind} "${name}" (ID ${record.id}) — ${describeChanges(changes)}.`,
+    reply: `Please confirm: change ${kind} "${name}" (ID ${record.id}) — ${describeChanges(changes, names)}.`,
     actions: UPDATE_ACTIONS,
   };
 }
@@ -313,7 +337,7 @@ async function startDelete(ctx, kind, aiResult) {
     return { reply: error };
   }
 
-  saveSession(ctx.key, { workflow: "confirm_delete", kind, id: record.id, name });
+  await saveSession(ctx, { workflow: "confirm_delete", kind, id: record.id, name });
 
   const cascadeNote =
     kind === "customer" ? " This also deletes all products linked to this customer." : "";
@@ -325,14 +349,14 @@ async function startDelete(ctx, kind, aiResult) {
 }
 
 async function handleAction(ctx, actionId) {
-  const session = getSession(ctx.key);
+  const session = await getSession(ctx);
   const expectedWorkflow = actionId.endsWith("_update") ? "confirm_update" : "confirm_delete";
 
   if (!session || session.workflow !== expectedWorkflow) {
     return { reply: "That request has expired or was already handled. Please ask again." };
   }
 
-  clearSession(ctx.key);
+  await clearSession(ctx);
 
   if (actionId.startsWith("cancel_")) {
     return {
@@ -365,7 +389,7 @@ async function handleAction(ctx, actionId) {
   return {
     reply:
       expectedWorkflow === "confirm_update"
-        ? `Done. ${kind === "customer" ? "Customer" : "Product"} "${name}" was updated: ${describeChanges(session.changes)}.`
+        ? `Done. ${kind === "customer" ? "Customer" : "Product"} "${name}" was updated: ${describeChanges(session.changes, session.names)}.`
         : `Done. ${kind === "customer" ? "Customer" : "Product"} "${name}" was deleted.`,
   };
 }
@@ -417,10 +441,10 @@ async function handleMessage(ctx, message, history) {
     return handleAction(ctx, message.slice(ACTION_PREFIX.length));
   }
 
-  const session = getSession(ctx.key);
+  const session = await getSession(ctx);
 
   if (isCancel(message)) {
-    clearSession(ctx.key);
+    await clearSession(ctx);
     return { reply: session ? "Okay, I've cancelled that." : "There's nothing in progress to cancel." };
   }
 
@@ -430,7 +454,7 @@ async function handleMessage(ctx, message, history) {
 
   // Anything else abandons a half-finished flow or an unanswered confirmation.
   if (session) {
-    clearSession(ctx.key);
+    await clearSession(ctx);
   }
 
   const aiResult = (await ai.analyzeUserMessage(history)) || { intent: "general_question" };

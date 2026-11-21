@@ -1,49 +1,55 @@
-// In-memory store for multi-step assistant conversations (e.g. "create customer" asking one field at a time).
-// Entries expire after SESSION_TTL_MS of inactivity so memory cannot grow without limit.
-// Note: data is lost on restart and is not shared between server instances.
+const { getPool } = require("../db");
 
-const SESSION_TTL_MS = 15 * 60 * 1000;
-const MAX_SESSIONS = 5000;
+// Multi-step assistant conversations, stored in MySQL (assistant_sessions) so they
+// survive restarts and work with more than one server instance.
+// `ctx` is { key, userId }; key is "<userId>:<browser session id>".
 
-const sessions = new Map();
+const SESSION_TTL_MINUTES = 15;
 
-function isExpired(entry) {
-  return Date.now() - entry.updatedAt > SESSION_TTL_MS;
-}
-
-function getSession(key) {
-  const entry = sessions.get(key);
-  if (!entry) {
+async function getSession(ctx) {
+  const [rows] = await getPool().execute(
+    `SELECT data FROM assistant_sessions
+     WHERE session_key = ? AND user_id = ?
+       AND updated_at > (CURRENT_TIMESTAMP - INTERVAL ${SESSION_TTL_MINUTES} MINUTE)`,
+    [ctx.key, ctx.userId]
+  );
+  if (!rows[0]) {
     return null;
   }
-  if (isExpired(entry)) {
-    sessions.delete(key);
-    return null;
-  }
-  return entry.session;
+  // mysql2 parses JSON columns; older MySQL/MariaDB setups may return a string.
+  const { data } = rows[0];
+  return typeof data === "string" ? JSON.parse(data) : data;
 }
 
-function saveSession(key, session) {
-  // Map keeps insertion order, so the first key is the oldest. Drop it when full.
-  if (!sessions.has(key) && sessions.size >= MAX_SESSIONS) {
-    sessions.delete(sessions.keys().next().value);
-  }
-  sessions.delete(key);
-  sessions.set(key, { session, updatedAt: Date.now() });
+async function saveSession(ctx, session) {
+  await getPool().execute(
+    `INSERT INTO assistant_sessions (session_key, user_id, data, updated_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON DUPLICATE KEY UPDATE data = VALUES(data), user_id = VALUES(user_id), updated_at = CURRENT_TIMESTAMP`,
+    [ctx.key, ctx.userId, JSON.stringify(session)]
+  );
   return session;
 }
 
-function clearSession(key) {
-  sessions.delete(key);
+async function clearSession(ctx) {
+  await getPool().execute("DELETE FROM assistant_sessions WHERE session_key = ?", [ctx.key]);
+}
+
+async function deleteExpiredSessions() {
+  await getPool().execute(
+    `DELETE FROM assistant_sessions
+     WHERE updated_at < (CURRENT_TIMESTAMP - INTERVAL ${SESSION_TTL_MINUTES} MINUTE)`
+  );
 }
 
 const cleanupTimer = setInterval(() => {
-  for (const [key, entry] of sessions) {
-    if (isExpired(entry)) {
-      sessions.delete(key);
+  deleteExpiredSessions().catch((error) => {
+    // The pool is not ready during startup; anything else is worth logging.
+    if (!/not initialized/i.test(error.message)) {
+      console.error("Assistant session cleanup failed:", error.message);
     }
-  }
-}, 60 * 1000);
+  });
+}, 5 * 60 * 1000);
 
 // Do not keep the process alive just for this timer.
 cleanupTimer.unref();
@@ -52,4 +58,5 @@ module.exports = {
   getSession,
   saveSession,
   clearSession,
+  deleteExpiredSessions,
 };
